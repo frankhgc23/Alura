@@ -15,7 +15,7 @@
  */
 
 import { log, toast } from "./utils.js";
-import { preferCodec, setBitrate, codecFromSdp } from "./sdp.js";
+import { preferCodec, setBitrate, codecFromSdp, senderParameters } from "./sdp.js";
 
 const RTC_CONFIG = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
@@ -73,6 +73,22 @@ export class WhipPublisher extends EventTarget {
     pc.oniceconnectionstatechange = () => this._onIce(pc.iceConnectionState);
     pc.onconnectionstatechange = () => this._onConn(pc.connectionState);
     pc.onicecandidateerror = (e) => log(`Aviso ICE: ${e.errorText ?? e.errorCode}`, "warn");
+
+    // --- Bitrate REAL vía RTCRtpSender.setParameters ---------------------------
+    // FIX: los hints SDP (b=AS/x-google-*) no siempre son respetados por el
+    // motor de codificación; fijar senderEncodings.maxBitrate sobre el sender
+    // del transceiver es lo que garantiza que el cambio se aplique. Se hace
+    // aquí (y en cada renegociación/reconexión) leyendo this.opts fresco.
+    try {
+      for (const tr of pc.getTransceivers()) {
+        const kind = tr.sender?.track?.kind;
+        if (!kind) continue;
+        const kbps = kind === "video" ? this.opts.videoKbps : this.opts.audioKbps;
+        if (kbps > 0) await senderParameters(tr.sender, kind, kbps);
+      }
+    } catch (err) {
+      log(`No se pudo fijar maxBitrate en el sender: ${err.message}`, "warn");
+    }
 
     // --- Offer + munging -------------------------------------------------------
     let offer = await pc.createOffer();
@@ -180,6 +196,33 @@ export class WhipPublisher extends EventTarget {
         if (!this._manualStop) this._scheduleRetry();  // sigue reintentando cada 4 s
       }
     }, 4000);
+  }
+
+  /**
+   * Cambia el bitrate EN CALIENTE (sin renegociar): actualiza opts y aplica
+   * RTCRtpSender.setParameters sobre los senders vivos. Si aún no hay PC,
+   * solo guarda el valor para la próxima negociación.
+   */
+  async applyBitrates({ videoKbps, audioKbps } = {}) {
+    if (videoKbps != null) this.opts.videoKbps = videoKbps;
+    if (audioKbps != null) this.opts.audioKbps = audioKbps;
+    if (!this.pc) return false;
+    let ok = true;
+    try {
+      for (const tr of this.pc.getTransceivers()) {
+        const kind = tr.sender?.track?.kind;
+        if (kind === "video" && this.opts.videoKbps > 0) {
+          await senderParameters(tr.sender, "video", this.opts.videoKbps);
+        } else if (kind === "audio" && this.opts.audioKbps > 0) {
+          await senderParameters(tr.sender, "audio", this.opts.audioKbps);
+        }
+      }
+      log(`Bitrate aplicado en caliente → vídeo ${this.opts.videoKbps} kb/s · audio ${this.opts.audioKbps} kb/s`, "ok");
+    } catch (err) {
+      ok = false;
+      log(`applyBitrates parcial: ${err.message}`, "warn");
+    }
+    return ok;
   }
 
   /** Sustituye una pista en caliente sin renegociar (cambio de dispositivo). */

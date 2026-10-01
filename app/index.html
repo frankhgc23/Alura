@@ -105,13 +105,26 @@
         </div>
 
         <label class="field range-field">
-          <span>Bitrate vídeo <output id="vbitOut">2500 kbps</output></span>
-          <input type="range" id="vbitrate" min="300" max="12000" step="100" value="2500">
+          <span>Bitrate vídeo <output id="vbitOut">2500 kb/s</output></span>
+          <input type="range" id="vbitrate" min="0" max="3" step="1" list="vbitTicks" value="1">
+          <datalist id="vbitTicks">
+            <option value="0" label="1000"></option>
+            <option value="1" label="2500"></option>
+            <option value="2" label="4000"></option>
+            <option value="3" label="6000"></option>
+          </datalist>
+          <div class="tick-labels" aria-hidden="true"><b>1000</b><b>2500</b><b>4000</b><b>6000</b></div>
         </label>
 
         <label class="field range-field">
-          <span>Bitrate audio <output id="abitOut">128 kbps</output></span>
-          <input type="range" id="abitrate" min="32" max="320" step="16" value="128">
+          <span>Bitrate audio <output id="abitOut">64 kb/s</output></span>
+          <input type="range" id="abitrate" min="0" max="2" step="1" list="abitTicks" value="1">
+          <datalist id="abitTicks">
+            <option value="0" label="48"></option>
+            <option value="1" label="64"></option>
+            <option value="2" label="96"></option>
+          </datalist>
+          <div class="tick-labels" aria-hidden="true"><b>48</b><b>64</b><b>96</b></div>
         </label>
 
         <div class="field-grid">

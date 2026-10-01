@@ -168,6 +168,8 @@ select:focus, input:focus { border-color: var(--accent); }
 
 .range-field output { float: right; color: var(--accent); font-family: var(--mono); font-size: 12px; }
 input[type="range"] { width: 100%; accent-color: var(--primary); padding: 0; }
+.tick-labels { display: flex; justify-content: space-between; margin-top: 4px; }
+.tick-labels b { font: 600 10.5px/1 var(--mono); color: var(--muted); }
 
 .switch-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--muted); font-size: 12.5px; cursor: pointer; }
 .switch-row input { accent-color: var(--primary); width: 15px; height: 15px; }

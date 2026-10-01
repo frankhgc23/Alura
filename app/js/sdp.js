@@ -165,3 +165,31 @@ export async function detectCodecSupport(kind, codec) {
   pc.close();
   return matchingPayloadTypes(offer.sdp.split(/\r?\n/), kind, codec).length > 0;
 }
+
+/**
+ * Fija el bitrate REAL del canal mediante RTCRtpSender.setParameters().
+ * Es el mecanismo garantizado en Chrome/Edge/Safari/Firefox para limitar la
+ * codificación (los hints del SDP son solo sugerencias). Se llama:
+ *   - al negociar (createOffer antes/setLocalDescription después),
+ *   - al cambiar el slider en caliente (WhipPublisher.applyBitrates),
+ *   - en cada reconexión (_negotiate vuelve a leer this.opts).
+ * @param {RTCRtpSender} sender
+ * @param {"video"|"audio"} kind
+ * @param {number} kbps
+ */
+export async function senderParameters(sender, kind, kbps) {
+  if (!sender || !kbps || kbps <= 0) return false;
+  const params = sender.getParameters?.();
+  if (!params) return false;
+  if (!params.encodings || !params.encodings.length) {
+    params.encodings = [{ rid: kind === "video" ? "q" : "a" }];
+  }
+  const bps = Math.round(kbps * 1000);
+  for (const enc of params.encodings) {
+    enc.maxBitrate = bps;
+    enc.minBitrate = Math.round(bps * 0.6);
+    if (kind === "video") enc.startBitrate = bps;
+  }
+  await sender.setParameters(params);
+  return true;
+}

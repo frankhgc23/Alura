@@ -39,14 +39,36 @@ const els = {
   stUptime: $("#stUptime"), stBytes: $("#stBytes"), stRetries: $("#stRetries"),
 };
 
-/* --------------------- Persistencia de configuración -------------------- */
+/* --------------------- Opciones discretas de bitrate ---------------------- */
+/* El slider trabaja por ÍNDICE (0..n-1); el valor real en kb/s se resuelve
+   aquí, de modo que UI y publisher usan siempre la misma tabla. */
+const VBIT_OPTIONS = [1000, 2500, 4000, 6000];   // kb/s vídeo
+const ABIT_OPTIONS = [48, 64, 96];               // kb/s audio
+
+/** Devuelve el kbps efectivo para el índice actual del slider. */
+function kbpsFor(el, options) {
+  const i = Math.min(options.length - 1, Math.max(0, Math.round(+el.value || 0)));
+  return options[i];
+}
+const videoKbps = () => kbpsFor(els.vbit, VBIT_OPTIONS);
+const audioKbps = () => kbpsFor(els.abit, ABIT_OPTIONS);
+
+/* ------------------------- Persistencia de configuración -------------------- */
 const cfg = loadConfig();
 if (cfg.whipUrl) els.whipUrl.value = cfg.whipUrl;
 if (cfg.whipToken) els.whipToken.value = cfg.whipToken;
 if (cfg.res) els.res.value = cfg.res;
 if (cfg.mode) els.mode.value = cfg.mode;
-if (cfg.vbit) els.vbit.value = cfg.vbit;
-if (cfg.abit) els.abit.value = cfg.abit;
+// Compatibilidad: versiones antiguas guardaban kb/s puros (300–12000 / 32–320);
+// las nuevas guardan el índice del slider. Se normaliza al cargar.
+if (cfg.vbit != null) {
+  const v = +cfg.vbit;
+  els.vbit.value = String(VBIT_OPTIONS.includes(v) ? VBIT_OPTIONS.indexOf(v) : (v < VBIT_OPTIONS.length ? v : 1));
+}
+if (cfg.abit != null) {
+  const v = +cfg.abit;
+  els.abit.value = String(ABIT_OPTIONS.includes(v) ? ABIT_OPTIONS.indexOf(v) : (v < ABIT_OPTIONS.length ? v : 1));
+}
 if (cfg.aCodec) els.aCodec.value = cfg.aCodec;
 if (cfg.vCodec) els.vCodec.value = cfg.vCodec;
 if (cfg.hpf) els.hpf.value = cfg.hpf;
@@ -55,7 +77,7 @@ function persist() {
   saveConfig({
     whipUrl: els.whipUrl.value.trim(), whipToken: els.whipToken.value.trim(),
     res: els.res.value, mode: els.mode.value,
-    vbit: +els.vbit.value, abit: +els.abit.value,
+    vbit: +els.vbit.value, abit: +els.abit.value,   // se guarda el índice
     aCodec: els.aCodec.value, vCodec: els.vCodec.value, hpf: els.hpf.value,
   });
 }
@@ -153,8 +175,8 @@ async function goLive() {
   pub = new WhipPublisher({
     endpoint: els.whipUrl.value.trim(),
     token: els.whipToken.value.trim() || undefined,
-    videoKbps: +els.vbit.value,
-    audioKbps: +els.abit.value,
+    videoKbps: videoKbps(),   // valor REAL según tabla (1000/2500/4000/6000)
+    audioKbps: audioKbps(),   // valor REAL según tabla (48/64/96)
     videoCodec: els.vCodec.value || undefined,
     audioCodec: els.aCodec.value || undefined,
     tracks: { video: capture.videoTrack, audio: capture.audioTrack },
@@ -292,8 +314,22 @@ els.mode.onchange = async () => {
   if (capture.videoTrack && capture.kind === "camera") await capture.reapplyConstraints();
 };
 
-els.vbit.oninput = () => { els.vbitOut.textContent = `${els.vbit.value} kbps`; persist(); if (pub) pub.opts.videoKbps = +els.vbit.value; };
-els.abit.oninput = () => { els.abitOut.textContent = `${els.abit.value} kbps`; persist(); if (pub) pub.opts.audioKbps = +els.abit.value; };
+/* Sliders discretos: el valor del input es el ÍNDICE de la tabla. Al moverlos
+   se pinta el kb/s real, se persiste y —si hay directo— se aplica EN CALIENTE
+   vía RTCRtpSender.setParameters (sin renegociar ni cortar la emisión). */
+els.vbit.oninput = () => {
+  els.vbitOut.textContent = `${videoKbps()} kb/s`;
+  persist();
+  if (pub) pub.applyBitrates({ videoKbps: videoKbps() });
+};
+els.abit.oninput = () => {
+  els.abitOut.textContent = `${audioKbps()} kb/s`;
+  persist();
+  if (pub) pub.applyBitrates({ audioKbps: audioKbps() });
+};
+// Sincronizar <output> inicial con la tabla tras restaurar la config
+els.vbitOut.textContent = `${videoKbps()} kb/s`;
+els.abitOut.textContent = `${audioKbps()} kb/s`;
 els.aCodec.onchange = persist;
 els.vCodec.onchange = persist;
 els.whipUrl.oninput = () => { persist(); els.goLive.disabled = !capture.stream || !isWhipEndpointValid(); };
