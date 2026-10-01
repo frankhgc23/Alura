@@ -151,6 +151,14 @@
         </div>
         <p class="codec-support" id="codecSupport"></p>
 
+        <!-- Modo solo audio: se excluye la línea de vídeo del SDP offer
+             (createOffer({offerToReceiveVideo:false})) → el servidor nunca
+             reserva decoder/bandwidth de vídeo. Cambiable en caliente. -->
+        <label class="switch-row" title="Transmite únicamente el micrófono; la pantalla se mantiene despierta con Wake Lock">
+          <input type="checkbox" id="btnAudioOnly">
+          <span>Solo audio (radio / podcast — sin vídeo)</span>
+        </label>
+
         <div class="row-buttons big">
           <button id="btnGoLive" class="go-live" disabled>🔴 GO LIVE</button>
           <button id="btnStop" class="danger" disabled>DETENER</button>

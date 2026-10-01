@@ -31,6 +31,7 @@ export class CaptureManager extends EventTarget {
     this.videoTrack = null;
     this.audioTrack = null;
     this.kind = "camera";            // "camera" | "screen"
+    this.audioOnly = false;          // modo SOLO AUDIO (no se abre la cámara)
     this.deviceIds = { video: "", audio: "" };
     this.resolutionKey = "1280x720";
     this.mode = "resolution";        // "resolution" | "framerate"
@@ -65,19 +66,23 @@ export class CaptureManager extends EventTarget {
   }
 
   /** Solicita un nuevo stream de vídeo+cámaras/micrófonos seleccionados. */
-  async start({ videoKind = this.kind, videoDeviceId, audioDeviceId } = {}) {
+  async start(opts = {}) {
+    const { videoKind = this.kind, videoDeviceId, audioDeviceId } = opts;
     this.kind = videoKind;
     if (videoDeviceId != null) this.deviceIds.video = videoDeviceId;
     if (audioDeviceId != null) this.deviceIds.audio = audioDeviceId;
 
     const oldVideo = this.videoTrack;
+    // En modo SOLO AUDIO no se abre la cámara: ahorra CPU/luz LED/energía en móvil.
+    const wantVideo = !opts.audioOnly && !this.audioOnly;
+    if (opts.audioOnly != null) this.audioOnly = !!opts.audioOnly;
     const constraints = {
-      video: this.videoConstraints(this.deviceIds.video),
+      video: wantVideo ? this.videoConstraints(this.deviceIds.video) : false,
       audio: this.audioConstraints(),
     };
 
     let newStream;
-    if (this.kind === "screen") {
+    if (this.kind === "screen" && wantVideo) {
       newStream = await navigator.mediaDevices.getDisplayMedia({
         video: { frameRate: { ideal: TARGET_FPS } },
         audio: true,
@@ -133,6 +138,19 @@ export class CaptureManager extends EventTarget {
     };
     if (this.deviceIds.audio) c.deviceId = { exact: this.deviceIds.audio };
     return c;
+  }
+
+  /** Apaga/enciende la captura de vídeo al alternar el modo solo audio. */
+  setAudioOnly(on) {
+    this.audioOnly = !!on;
+    if (on && this.videoTrack) {          // apagar cámara: ahorra batería/CPU en móvil
+      this.videoTrack.stop();
+      this.stream?.removeTrack(this.videoTrack);
+      this.videoTrack = null;
+    } else if (!on && !this.videoTrack) { // reabrir solo la cámara
+      return this.start({ videoKind: "camera" }).then(() => true).catch(() => false);
+    }
+    return Promise.resolve(true);
   }
 
   /** Vuelve a la última cámara tras finalizar la pantalla compartida. */

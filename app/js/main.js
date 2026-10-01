@@ -29,6 +29,7 @@ const els = {
   vbit: $("#vbitrate"), abit: $("#abitrate"), vbitOut: $("#vbitOut"), abitOut: $("#abitOut"),
   aCodec: $("#audioCodec"), vCodec: $("#videoCodec"), codecSupport: $("#codecSupport"),
   goLive: $("#btnGoLive"), stop: $("#btnStop"), autoReconnect: $("#autoReconnect"),
+  audioOnly: $("#btnAudioOnly"),
   hpf: $("#hpfSelect"), vuL: $("#vuL"), vuR: $("#vuR"), pkL: $("#pkL"), pkR: $("#pkR"),
   dbL: $("#dbL"), dbR: $("#dbR"), clip: $("#clipBanner"),
   noSignal: $("#noSignal"), frame: $("#monitorFrame"),
@@ -72,6 +73,7 @@ if (cfg.abit != null) {
 if (cfg.aCodec) els.aCodec.value = cfg.aCodec;
 if (cfg.vCodec) els.vCodec.value = cfg.vCodec;
 if (cfg.hpf) els.hpf.value = cfg.hpf;
+els.audioOnly.checked = !!cfg.audioOnly;
 
 function persist() {
   saveConfig({
@@ -79,6 +81,7 @@ function persist() {
     res: els.res.value, mode: els.mode.value,
     vbit: +els.vbit.value, abit: +els.abit.value,   // se guarda el índice
     aCodec: els.aCodec.value, vCodec: els.vCodec.value, hpf: els.hpf.value,
+    audioOnly: els.audioOnly.checked,
   });
 }
 
@@ -108,19 +111,20 @@ async function refreshDeviceList() {
 async function startPreview() {
   try {
     await capture.start({
-      videoKind: els.videoKind.value,
+      videoKind: els.audioOnly.checked ? "camera" : els.videoKind.value,
+      audioOnly: els.audioOnly.checked,
       videoDeviceId: els.videoSel.value || undefined,
       audioDeviceId: els.audioSel.value || undefined,
     });
     video.srcObject = capture.stream;
-    els.noSignal.hidden = true;
+    els.noSignal.hidden = !!capture.stream;
     els.btnPreview.disabled = true;
     els.btnStopPreview.disabled = false;
     els.goLive.disabled = !isWhipEndpointValid();
     audio.attach(capture.stream);
     audio.setHighPass(+els.hpf.value);
     await refreshDeviceList();      // ahora los labels incluyen nombre real
-    log("Previsualización iniciada", "ok");
+    log(els.audioOnly.checked ? "Previsualización iniciada (SOLO AUDIO — cámara apagada)" : "Previsualización iniciada", "ok");
   } catch (err) {
     els.noSignal.hidden = false;
     log(`Error de captura: ${err.name} — ${err.message}`, "err");
@@ -142,10 +146,12 @@ function stopPreview() {
 /** Cambio de dispositivo sin cortar: reabre captura y replaceTrack si hay directo. */
 async function swapTrack(kind) {
   if (!capture.stream) return;             // aún no hay previsualización
+  if (kind === "video" && els.audioOnly.checked) return;  // sin vídeo en modo solo audio
   const wasLive = pub?.state === "connected" || pub?.state === "reconnecting";
   try {
     await capture.start({
       videoKind: els.videoKind.value,
+      audioOnly: els.audioOnly.checked,
       videoDeviceId: kind === "video" ? els.videoSel.value : els.videoSel.value || undefined,
       audioDeviceId: kind === "audio" ? els.audioSel.value : els.audioSel.value || undefined,
     });
@@ -179,6 +185,7 @@ async function goLive() {
     audioKbps: audioKbps(),   // valor REAL según tabla (48/64/96)
     videoCodec: els.vCodec.value || undefined,
     audioCodec: els.aCodec.value || undefined,
+    audioOnly: els.audioOnly.checked,   // oferta SDP sin m=video si está activo
     tracks: { video: capture.videoTrack, audio: capture.audioTrack },
   });
   pub.autoReconnect = els.autoReconnect.checked;
@@ -188,7 +195,10 @@ async function goLive() {
     const live = e.detail.state === "connected";
     els.stop.disabled = !(live || e.detail.state === "reconnecting" || e.detail.state === "connecting");
     els.goLive.disabled = live || e.detail.state === "connecting" || e.detail.state === "reconnecting";
+    // Pantalla siempre despierta durante el directo (refuerzo en móvil).
+    if (live) hud.requestWakeLock();
   });
+  hud.setAudioOnly(els.audioOnly.checked);
   pub.addEventListener("ice", (e) => hud.setIce(e.detail.state));
   pub.addEventListener("codecs", (e) => { if (stats) stats.codecs = { video: e.detail.video, audio: e.detail.audio }; });
 
@@ -332,6 +342,53 @@ els.vbitOut.textContent = `${videoKbps()} kb/s`;
 els.abitOut.textContent = `${audioKbps()} kb/s`;
 els.aCodec.onchange = persist;
 els.vCodec.onchange = persist;
+
+/* Modo SOLO AUDIO: renegocia la publicación WHIP sin línea de vídeo (POST nuevo)
+   y apaga la cámara para ahorrar batería/CPU en móvil. Al desactivarlo reabre
+   la cámara y vuelve a negociar audio+vídeo. */
+let swappingAudioOnly = false;
+els.audioOnly.onchange = async () => {
+  if (swappingAudioOnly) return;                 // reentrancia desde setLiveMode
+  persist();
+  const on = els.audioOnly.checked;
+  if (!capture.stream && !pub) {
+    log(on ? "Modo SOLO AUDIO seleccionado" : "Modo AUDIO+VÍDEO seleccionado", "info");
+    return;                                      // aún no emite: se aplicará al iniciar
+  }
+  swappingAudioOnly = true;
+  try {
+    await capture.setAudioOnly(on);              // apaga/reabre la pista de vídeo
+    video.srcObject = capture.stream;            // monitor refleja el cambio
+    if (!on && capture.audioTrack) {             // al reabrir cámara, reenganchar el VU
+      audio.detach(); audio.attach(capture.stream); audio.setHighPass(+els.hpf.value);
+    }
+    hud.setAudioOnly(on);                        // badge SOLO AUDIO en el HUD
+    if (pub) {
+      const ok = await pub.setAudioOnly(on);     // renegociación WHIP en caliente
+      if (!ok) toast("No se pudo renegociar el modo; intente DETENER y GO LIVE", "warn", 5000);
+    }
+    log(on ? "🎙 Transmisión SOLO AUDIO activa" : "📹 Transmisión AUDIO+VÍDEO activa", "ok");
+  } finally {
+    swappingAudioOnly = false;
+  }
+};
+
+/**
+ * API pública del modo de emisión:
+ *   setLiveMode("audio") → solo micro (radio/podcast; SDP sin m=video)
+ *   setLiveMode("av")    → audio + vídeo
+ * Acepta también booleanos. Actualiza checkbox, captura y publicación.
+ */
+async function setLiveMode(mode) {
+  const on = mode === true || mode === "audio" || mode === "audio-only";
+  if (els.audioOnly.checked !== on) {
+    els.audioOnly.checked = on;
+    await els.audioOnly.onchange();   // dispara toda la cadena de cambio
+  }
+  return on;
+}
+window.WHIP = { setLiveMode, get state() { return pub?.state ?? "idle"; }, get audioOnly() { return els.audioOnly.checked; } };
+
 els.whipUrl.oninput = () => { persist(); els.goLive.disabled = !capture.stream || !isWhipEndpointValid(); };
 els.whipToken.oninput = persist;
 els.autoReconnect.onchange = () => { if (pub) pub.autoReconnect = els.autoReconnect.checked; };

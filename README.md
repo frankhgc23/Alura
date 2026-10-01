@@ -111,3 +111,14 @@ ffplay http://<host>:8888/<canal>/stream.m3u8   # si activas HLS
 - Activa `whipBearerToken` en tu proxy o `authMethod: http` en MediaMTX y usa
   el campo *Bearer Token* del panel.
 - Para NAT estrictos añade un TURN propio a `RTC_CONFIG` en `js/whip.js`.
+
+## Novedad: modo SOLO AUDIO (radio/podcast) y pantalla siempre activa
+- **Checkbox "Solo audio"** (`#btnAudioOnly`) en el panel Transmisión. Estrategia:
+  renegociación SDP limpia — el offer se genera **sin `m=video`** (no se añade el
+  transceiver de vídeo), MediaMTX publica un stream exclusivamente de audio sin
+  reservar decodificador ni bandwidth de vídeo. La cámara se **apaga** para ahorrar
+  batería/CPU/LED en móvil. Cambiable en caliente durante el directo (nuevo POST WHIP).
+- API programática: `WHIP.setLiveMode("audio" | "av")` desde la consola.
+- El flag se persiste en localStorage y sobrevive a reconexiones automáticas.
+- **Wake Lock reforzado**: durante LIVE, CONECTANDO y RECONECTANDO la pantalla no
+  duerme; si el sistema libera el lock (segundo plano), se re-adquiere al volver.

@@ -57,10 +57,24 @@ export class BroadcastHud {
     const [ind, label, hudTxt, cls] = map[state] ?? map.idle;
     this.el.indicator.dataset.state = ind;
     this.el.stateLabel.textContent = label;
+    // Badge SOLO AUDIO (radio/podcast) junto al estado cuando aplica.
+    if (this.audioOnly && state === "connected") {
+      hudTxt = "● LIVE · 🎙 SOLO AUDIO";
+      this.el.live.title = "Transmisión de únicamente audio (SDP sin m=video)";
+    } else {
+      this.el.live.title = "";
+    }
     this.el.live.textContent = hudTxt;
     this.el.live.className = `hud-live ${cls}`;
-    if (state === "connected") this.requestWakeLock();
+    // Wake Lock reforzado: mientras la sesión esté viva (conectada o
+    // reconectando) la pantalla NO debe dormir en móviles.
+    if (state === "connected" || state === "reconnecting" || state === "connecting") this.requestWakeLock();
     else if (state === "closed" || state === "failed") this.releaseWakeLock();
+  }
+
+  /** Marca el modo actual para el badge del HUD. */
+  setAudioOnly(on) {
+    this.audioOnly = !!on;
   }
 
   setIce(state) {
@@ -106,7 +120,14 @@ export class BroadcastHud {
     try {
       if ("wakeLock" in navigator && !this._wakeLock) {
         this._wakeLock = await navigator.wakeLock.request("screen");
-        this._wakeLock.addEventListener("release", () => { this._wakeLock = null; });
+        // El sistema puede liberar el lock en segundo plano: re-solicitar.
+        this._wakeLock.addEventListener("release", () => {
+          this._wakeLock = null;
+          if (document.visibilityState === "visible" &&
+              (this.el.indicator.dataset.state === "live" || this.el.indicator.dataset.state === "reconnecting")) {
+            this.requestWakeLock();     // pantalla siempre activa durante el directo
+          }
+        });
       }
     } catch { /* no soportado / recortado por el sistema */ }
   }
@@ -119,7 +140,8 @@ export class BroadcastHud {
   /** Re-solicita el lock al volver la pestaña (se libera al ocultarse). */
   _initWakeLockResume() {
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible" && this.el.indicator.dataset.state === "live") {
+      const st = this.el.indicator.dataset.state;
+      if (document.visibilityState === "visible" && (st === "live" || st === "reconnecting")) {
         this.requestWakeLock();
       }
     });

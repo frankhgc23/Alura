@@ -56,18 +56,49 @@ export class WhipPublisher extends EventTarget {
   /** Arranca la primera conexión. */
   async connect() {
     this._manualStop = false;
-    await this._negotiate();
+    await this._negotiate({ audioOnly: this.opts.audioOnly });
   }
 
-  /** Crea PC, ofrece, publica vía HTTP POST y aplica el answer. */
-  async _negotiate() {
+  /**
+   * Cambia el modo SOLO AUDIO ↔ AUDIO+VÍDEO.
+   * Si hay sesión activa, renegocia una nueva publicación WHIP (POST) con el
+   * set de pistas adecuado; si aún no emite, solo memoriza el flag.
+   * @param {boolean} on
+   */
+  async setAudioOnly(on) {
+    this.opts.audioOnly = !!on;
+    if (!this.pc || this._manualStop) return false;
+    log(on ? "Cambiando a transmisión SOLO AUDIO…" : "Volviendo a transmisión AUDIO+VÍDEO…", "info");
+    try {
+      await this._negotiate({ audioOnly: !!on });   // DELETE implícito al crear nuevo PC/recurso
+      return true;
+    } catch (err) {
+      log(`Renegociación fallida: ${err.message}`, "err");
+      if (this.autoReconnect && !this._manualStop) this._scheduleRetry();
+      return false;
+    }
+  }
+
+  /** Crea PC, ofrece, publica vía HTTP POST y aplica el answer.
+   *  @param {{audioOnly?:boolean}} [override] — fuerza modo solo audio en esta oferta. */
+  async _negotiate(override = {}) {
     this._cleanupPeer();
     const pc = new RTCPeerConnection(RTC_CONFIG);
     this.pc = pc;
 
+    // --- Modo SOLO AUDIO -------------------------------------------------------
+    // Estrategia elegida: no añadir (ni detener) transceivers de vídeo y crear
+    // la oferta con offerToReceiveVideo:false → el SDP offer NO contiene m=video.
+    // MediaMTX/WHIP publican entonces un stream exclusivamente de audio, sin
+    // reservar decodificador ni ancho de banda de vídeo. Es más limpio que
+    // track.stop()/disable() porque no apaga la cámara (previsualización viva)
+    // y permite volver a vídeo con una simple renegociación.
+    const audioOnly = override.audioOnly ?? this.opts.audioOnly ?? false;
+    this.audioOnly = audioOnly;
+
     // --- Transceivers sendonly con nuestras pistas ---------------------------
     const { tracks } = this.opts;
-    if (tracks.video) pc.addTransceiver(tracks.video, { direction: "sendonly", streams: [this._streamOf(tracks.video)] });
+    if (!audioOnly && tracks.video) pc.addTransceiver(tracks.video, { direction: "sendonly", streams: [this._streamOf(tracks.video)] });
     if (tracks.audio) pc.addTransceiver(tracks.audio, { direction: "sendonly", streams: [this._streamOf(tracks.audio)] });
 
     pc.oniceconnectionstatechange = () => this._onIce(pc.iceConnectionState);
@@ -91,11 +122,12 @@ export class WhipPublisher extends EventTarget {
     }
 
     // --- Offer + munging -------------------------------------------------------
-    let offer = await pc.createOffer();
+    // sendonly puro: nunca se solicitan pistas entrantes (WHIP es ingest-only).
+    let offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false });
     let sdp = offer.sdp;
-    if (this.opts.videoCodec) sdp = preferCodec(sdp, "video", this.opts.videoCodec);
+    if (!audioOnly && this.opts.videoCodec) sdp = preferCodec(sdp, "video", this.opts.videoCodec);
     if (this.opts.audioCodec) sdp = preferCodec(sdp, "audio", this.opts.audioCodec);
-    sdp = setBitrate(sdp, "video", this.opts.videoKbps);
+    if (!audioOnly) sdp = setBitrate(sdp, "video", this.opts.videoKbps);
     sdp = setBitrate(sdp, "audio", this.opts.audioKbps);
     await pc.setLocalDescription({ type: "offer", sdp });
 
@@ -190,7 +222,7 @@ export class WhipPublisher extends EventTarget {
       this._emit("retry", { retries: this.retries });
       log(`Reintento de publicación #${this.retries}…`, "warn");
       try {
-        await this._negotiate();          // nueva oferta desde cero
+        await this._negotiate({ audioOnly: this.opts.audioOnly }); // nueva oferta desde cero, conserva el modo
       } catch (err) {
         log(`Fallo en reintento: ${err.message}`, "err");
         if (!this._manualStop) this._scheduleRetry();  // sigue reintentando cada 4 s
@@ -227,12 +259,31 @@ export class WhipPublisher extends EventTarget {
 
   /** Sustituye una pista en caliente sin renegociar (cambio de dispositivo). */
   async replaceTrack(kind, newTrack) {
+    if (this.audioOnly && kind === "video") return false;   // sin línea de vídeo publicada
     const sender = this.pc?.getSenders().find((s) => s.track?.kind === kind);
     if (!sender) return false;
     await sender.replaceTrack(newTrack);
     log(`Pista ${kind} sustituida en caliente (sin cortar el directo)`, "ok");
     this._emit("track-replaced", { kind });
     return true;
+  }
+
+  /** Pausa/reanuda SOLO la publicación de vídeo vía RTCRtpSender.setParameters
+   *  (encoding.active) — sin renegociar. La cámara sigue viva para el monitor. */
+  async setVideoPaused(paused) {
+    const sender = this.pc?.getSenders().find((s) => s.track?.kind === "video");
+    if (!sender) return false;
+    try {
+      const p = sender.getParameters();
+      if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+      p.encodings[0].active = !paused;
+      await sender.setParameters(p);
+      log(paused ? "Vídeo pausado (audio continúa)" : "Vídeo reanudado", "info");
+      return true;
+    } catch (err) {
+      log(`No se pudo pausar/reanudar vídeo: ${err.message}`, "warn");
+      return false;
+    }
   }
 
   /** Devuelve los RTCStatsReport para el módulo de estadísticas. */
