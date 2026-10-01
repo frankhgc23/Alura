@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="WHIP Studio — Panel profesional de transmisión en directo WebRTC/WHIP compatible con MediaMTX. Radio, TV, podcasting, iglesias y eventos.">
+  <meta name="theme-color" content="#0b1020">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="WHIP Studio">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <title>WHIP Studio · Broadcast Live</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <!-- ============================ HEADER ============================ -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">W</div>
+      <div class="brand-text">
+        <h1>WHIP Studio</h1>
+        <p>Broadcast-first · WebRTC / WHIP → MediaMTX</p>
+      </div>
+    </div>
+
+    <div class="live-indicator" id="liveIndicator" data-state="idle">
+      <span class="dot"></span><span id="liveStateLabel">EN ESPERA</span>
+      <span class="live-timer" id="liveTimer">00:00:00</span>
+    </div>
+
+    <div class="topbar-right">
+      <button class="icon-btn" id="btnHud" title="Mostrar/ocultar HUD broadcast" aria-pressed="true">HUD</button>
+      <button class="icon-btn" id="btnInstall" title="Instalar aplicación" hidden>⤓ Instalar</button>
+      <span class="conn-pill" id="connPill">ICE: —</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- ======================= COLUMNA IZQUIERDA: CONTROLES ======================= -->
+    <aside class="panel-col" id="controlPanel">
+
+      <!-- Dispositivos -->
+      <section class="card" id="cardDevices">
+        <h2 class="card-title"><span class="tick"></span>Captura</h2>
+
+        <label class="field">
+          <span>Origen de vídeo</span>
+          <select id="videoSourceKind">
+            <option value="camera">Cámara (UVC / HDMI-USB)</option>
+            <option value="screen">Compartir pantalla</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Cámara</span>
+          <select id="videoSelect"></select>
+        </label>
+
+        <label class="field">
+          <span>Micrófono</span>
+          <select id="audioSelect"></select>
+        </label>
+
+        <div class="row-buttons">
+          <button id="btnPreview" class="primary">▶ Iniciar previsualización</button>
+          <button id="btnStopPreview" class="ghost" disabled>■ Parar</button>
+        </div>
+        <p class="hint" id="deviceHint">El cambio de dispositivo durante el directo reemplaza la pista sin cortar la publicación WHIP.</p>
+      </section>
+
+      <!-- Transmisión -->
+      <section class="card" id="cardStream">
+        <h2 class="card-title"><span class="tick"></span>Transmisión</h2>
+
+        <label class="field">
+          <span>Endpoint WHIP</span>
+          <input type="url" id="whipUrl" placeholder="http://servidor:8080/whip/micanal" spellcheck="false">
+        </label>
+        <label class="field">
+          <span>Bearer Token (opcional)</span>
+          <input type="text" id="whipToken" placeholder="Authorization: Bearer …" spellcheck="false" autocomplete="off">
+        </label>
+
+        <div class="field-grid">
+          <label class="field">
+            <span>Resolución</span>
+            <select id="resSelect">
+              <option value="640x360">360p</option>
+              <option value="854x480">480p</option>
+              <option value="1280x720" selected>720p</option>
+              <option value="1920x1080">1080p</option>
+              <option value="3840x2160">4K UHD</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Modo</span>
+            <select id="modeSelect" title="preferencia de restricciones">
+              <option value="resolution" selected>Estudio (maintain-resolution)</option>
+              <option value="framerate">Exteriores (maintain-framerate)</option>
+            </select>
+          </label>
+        </div>
+
+        <label class="field range-field">
+          <span>Bitrate vídeo <output id="vbitOut">2500 kbps</output></span>
+          <input type="range" id="vbitrate" min="300" max="12000" step="100" value="2500">
+        </label>
+
+        <label class="field range-field">
+          <span>Bitrate audio <output id="abitOut">128 kbps</output></span>
+          <input type="range" id="abitrate" min="32" max="320" step="16" value="128">
+        </label>
+
+        <div class="field-grid">
+          <label class="field">
+            <span>Códec audio</span>
+            <select id="audioCodec">
+              <option value="opus" selected>Opus</option>
+              <option value="aac">AAC</option>
+              <option value="PCMU">PCMU (G.711 µ)</option>
+              <option value="PCMA">PCMA (G.711 A)</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Códec vídeo</span>
+            <select id="videoCodec">
+              <option value="">Auto (negociado)</option>
+              <option value="H264">H.264</option>
+              <option value="H265">H.265 / HEVC</option>
+              <option value="VP8">VP8</option>
+              <option value="VP9">VP9</option>
+              <option value="AV1">AV1</option>
+            </select>
+          </label>
+        </div>
+        <p class="codec-support" id="codecSupport"></p>
+
+        <div class="row-buttons big">
+          <button id="btnGoLive" class="go-live" disabled>🔴 GO LIVE</button>
+          <button id="btnStop" class="danger" disabled>DETENER</button>
+        </div>
+        <label class="switch-row">
+          <input type="checkbox" id="autoReconnect" checked>
+          <span>Reconexión automática (cada 4 s)</span>
+        </label>
+      </section>
+
+      <!-- Audio DSP -->
+      <section class="card" id="cardAudio">
+        <h2 class="card-title"><span class="tick"></span>Procesamiento de audio</h2>
+
+        <label class="field">
+          <span>Filtro paso alto (HPF)</span>
+          <select id="hpfSelect">
+            <option value="0" selected>OFF</option>
+            <option value="80">80 Hz</option>
+            <option value="100">100 Hz</option>
+          </select>
+        </label>
+
+        <div class="vu-wrap">
+          <div class="vu-ch">
+            <span class="vu-label">L</span>
+            <div class="vu-meter"><div class="vu-fill" id="vuL"></div><div class="vu-peak" id="pkL"></div></div>
+            <span class="vu-db" id="dbL">-∞ dB</span>
+          </div>
+          <div class="vu-ch">
+            <span class="vu-label">R</span>
+            <div class="vu-meter"><div class="vu-fill" id="vuR"></div><div class="vu-peak" id="pkR"></div></div>
+            <span class="vu-db" id="dbR">-∞ dB</span>
+          </div>
+        </div>
+        <div class="clip-banner" id="clipBanner" hidden>⚠ CLIPPING — reduzca la ganancia de entrada</div>
+      </section>
+
+      <!-- Estadísticas -->
+      <section class="card" id="cardStats">
+        <h2 class="card-title"><span class="tick"></span>Estadísticas en tiempo real</h2>
+        <div class="stats-grid">
+          <div class="stat"><span>Bitrate ↑</span><b id="stBitrate">—</b></div>
+          <div class="stat"><span>FPS</span><b id="stFps">—</b></div>
+          <div class="stat"><span>RTT</span><b id="stRtt">—</b></div>
+          <div class="stat"><span>Pérdida paquetes</span><b id="stLoss">—</b></div>
+          <div class="stat"><span>Resolución activa</span><b id="stRes">—</b></div>
+          <div class="stat"><span>Códecs</span><b id="stCodecs">—</b></div>
+          <div class="stat"><span>Jitter</span><b id="stJitter">—</b></div>
+          <div class="stat"><span>Tiempo en vivo</span><b id="stUptime">—</b></div>
+          <div class="stat"><span>Bytes enviados</span><b id="stBytes">—</b></div>
+          <div class="stat"><span>RECONNECTS</span><b id="stRetries">0</b></div>
+        </div>
+      </section>
+    </aside>
+
+    <!-- ======================= COLUMNA CENTRAL: MONITOR ======================= -->
+    <section class="monitor-col">
+      <div class="monitor-frame" id="monitorFrame">
+        <video id="previewVideo" autoplay muted playsinline></video>
+
+        <!-- Regla de tercios -->
+        <div class="thirds-overlay" id="thirdsOverlay" hidden>
+          <div class="t v" style="left:33.33%"></div><div class="t v" style="left:66.66%"></div>
+          <div class="t h" style="top:33.33%"></div><div class="t h" style="top:66.66%"></div>
+          <div class="safe-area"></div>
+        </div>
+
+        <!-- HUD broadcast -->
+        <div class="hud" id="hud">
+          <div class="hud-top">
+            <span class="hud-live" id="hudLive">● STANDBY</span>
+            <span class="hud-item" id="hudTime">00:00:00</span>
+            <span class="hud-item" id="hudBattery">🔋 —%</span>
+          </div>
+          <div class="hud-bottom">
+            <span class="hud-item" id="hudBitrate">— kb/s</span>
+            <span class="hud-item" id="hudFps">— fps</span>
+            <span class="hud-item" id="hudAudio">— dB</span>
+            <span class="hud-item" id="hudCodec">—</span>
+            <span class="hud-item" id="hudRes">—</span>
+            <span class="hud-item" id="hudZoom">1.0×</span>
+            <span class="hud-item" id="hudLoss">0.0 % loss</span>
+          </div>
+        </div>
+
+        <div class="no-signal" id="noSignal">
+          <div>NO SIGNAL</div>
+          <small>Inicie la previsualización para verificar encuadre y audio</small>
+        </div>
+
+        <div class="monitor-toolbar">
+          <button class="mt-btn" id="btnFullscreen" title="Pantalla completa">⛶</button>
+          <button class="mt-btn" id="btnThirds" title="Regla de tercios" aria-pressed="false">▦</button>
+          <button class="mt-btn" id="btnMirror" title="Espejo" aria-pressed="false">⇄</button>
+          <span class="mt-spacer"></span>
+          <span class="mt-zoom" id="zoomLabel">Zoom 1.0×</span>
+        </div>
+      </div>
+
+      <div class="status-log-wrap card">
+        <h2 class="card-title"><span class="tick"></span>Registro del emisor</h2>
+        <ul class="log" id="logList" aria-live="polite"></ul>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast-stack" id="toasts"></div>
+
+  <noscript>Esta aplicación requiere JavaScript habilitado.</noscript>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
