@@ -24,7 +24,7 @@ const video = $("#previewVideo");
 const els = {
   videoKind: $("#videoSourceKind"), videoSel: $("#videoSelect"), audioSel: $("#audioSelect"),
   btnPreview: $("#btnPreview"), btnStopPreview: $("#btnStopPreview"),
-  whipUrl: $("#whipUrl"), whipToken: $("#whipToken"),
+  whipMount: $("#whipMount"), whipPreview: $("#whipPreview"), whipToken: $("#whipToken"),
   res: $("#resSelect"), mode: $("#modeSelect"),
   vbit: $("#vbitrate"), abit: $("#abitrate"), vbitOut: $("#vbitOut"), abitOut: $("#abitOut"),
   aCodec: $("#audioCodec"), vCodec: $("#videoCodec"), codecSupport: $("#codecSupport"),
@@ -54,10 +54,43 @@ function kbpsFor(el, options) {
 const videoKbps = () => kbpsFor(els.vbit, VBIT_OPTIONS);
 const audioKbps = () => kbpsFor(els.abit, ABIT_OPTIONS);
 
+/* --------------------- Servidor WHIP fijo + punto de montaje --------------- */
+/* La emisora publica siempre en https://mtx.rcm1450.com/<canal>/whip.
+   El operador solo introduce el punto de montaje (p. ej. "live"). */
+const WHIP_BASE = "https://mtx.rcm1450.com";
+
+/** Normaliza el texto del campo a un canal válido ("live", "eventos/aula"…). */
+function normalizeMount(raw) {
+  let m = String(raw || "").trim();
+  // Tolerancia: si alguien pega la URL completa, se extrae el punto de montaje.
+  if (/^https?:\/\//i.test(m)) {
+    try { m = new URL(m).pathname; } catch { /* se usa tal cual */ }
+  }
+  m = m.replace(/^\/+/, "")            // sin slashes iniciales
+       .replace(/\/?whip\/?$/i, "")     // sin sufijo "/whip" duplicado
+       .replace(/[^A-Za-z0-9_~.%/-]/g, "") // caracteres válidos de ruta
+       .replace(/\/{2,}/g, "/")
+       .replace(/\/+$/, "");
+  return m;
+}
+
+/** Endpoint WHIP completo derivado del campo editable. */
+function whipEndpoint() {
+  const mount = normalizeMount(els.whipMount.value);
+  return mount ? `${WHIP_BASE}/${mount}/whip` : "";
+}
+
+function refreshWhipPreview() {
+  els.whipPreview.textContent = whipEndpoint() || `${WHIP_BASE}/…/whip`;
+}
+
 /* ------------------------- Persistencia de configuración -------------------- */
 const cfg = loadConfig();
-if (cfg.whipUrl) els.whipUrl.value = cfg.whipUrl;
+if (cfg.whipMount != null) els.whipMount.value = cfg.whipMount;
+else if (cfg.whipUrl) els.whipMount.value = normalizeMount(cfg.whipUrl); // migración
+else els.whipMount.value = "live";                                        // valor por defecto
 if (cfg.whipToken) els.whipToken.value = cfg.whipToken;
+refreshWhipPreview();
 if (cfg.res) els.res.value = cfg.res;
 if (cfg.mode) els.mode.value = cfg.mode;
 // Compatibilidad: versiones antiguas guardaban kb/s puros (300–12000 / 32–320);
@@ -77,7 +110,7 @@ els.audioOnly.checked = !!cfg.audioOnly;
 
 function persist() {
   saveConfig({
-    whipUrl: els.whipUrl.value.trim(), whipToken: els.whipToken.value.trim(),
+    whipMount: normalizeMount(els.whipMount.value), whipToken: els.whipToken.value.trim(),
     res: els.res.value, mode: els.mode.value,
     vbit: +els.vbit.value, abit: +els.abit.value,   // se guarda el índice
     aCodec: els.aCodec.value, vCodec: els.vCodec.value, hpf: els.hpf.value,
@@ -169,17 +202,16 @@ async function swapTrack(kind) {
 
 /* ------------------------------ Transmisión ------------------------------- */
 function isWhipEndpointValid() {
-  try { const u = new URL(els.whipUrl.value.trim()); return u.protocol === "http:" || u.protocol === "https:"; }
-  catch { return false; }
+  return whipEndpoint() !== "";
 }
 
 async function goLive() {
   if (!capture.stream) return toast("Inicie la previsualización primero", "warn");
-  if (!isWhipEndpointValid()) return toast("Indique un endpoint WHIP válido", "err");
+  if (!isWhipEndpointValid()) return toast("Indique un punto de montaje (p. ej. «live»)", "err");
   persist();
 
   pub = new WhipPublisher({
-    endpoint: els.whipUrl.value.trim(),
+    endpoint: whipEndpoint(),   // https://mtx.rcm1450.com/<canal>/whip
     token: els.whipToken.value.trim() || undefined,
     videoKbps: videoKbps(),   // valor REAL según tabla (1000/2500/4000/6000)
     audioKbps: audioKbps(),   // valor REAL según tabla (48/64/96)
@@ -389,7 +421,7 @@ async function setLiveMode(mode) {
 }
 window.WHIP = { setLiveMode, get state() { return pub?.state ?? "idle"; }, get audioOnly() { return els.audioOnly.checked; } };
 
-els.whipUrl.oninput = () => { persist(); els.goLive.disabled = !capture.stream || !isWhipEndpointValid(); };
+els.whipMount.oninput = () => { refreshWhipPreview(); persist(); els.goLive.disabled = !capture.stream || !isWhipEndpointValid(); };
 els.whipToken.oninput = persist;
 els.autoReconnect.onchange = () => { if (pub) pub.autoReconnect = els.autoReconnect.checked; };
 

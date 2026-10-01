@@ -104,6 +104,9 @@ ffplay http://<host>:8888/<canal>/stream.m3u8   # si activas HLS
   fielmente la señal publicada.
 - El Service Worker **nunca intercepta** peticiones cross-origin ni métodos
   distintos de GET: la ingesta WHIP (POST/DELETE) siempre va directa al servidor.
+- **Servidor fijo**: el endpoint WHIP es siempre `https://mtx.rcm1450.com/<canal>/whip`.
+  El panel solo expone el *punto de montaje* (por defecto `live`); para cambiar de
+  servidor, edita la constante `WHIP_BASE` en `app/js/main.js`.
 
 ## Producción
 

@@ -76,8 +76,14 @@
         <h2 class="card-title"><span class="tick"></span>Transmisión</h2>
 
         <label class="field">
-          <span>Endpoint WHIP</span>
-          <input type="url" id="whipUrl" placeholder="http://servidor:8080/whip/micanal" spellcheck="false">
+          <span>Punto de montaje (canal WHIP)</span>
+          <div class="input-affix">
+            <span class="affix-prefix" title="Servidor fijo de la emisora">https://mtx.rcm1450.com/</span>
+            <input type="text" id="whipMount" inputmode="url" pattern="[A-Za-z0-9_~.%/-]*"
+                   placeholder="live" spellcheck="false" autocapitalize="off" autocomplete="off">
+            <span class="affix-suffix" title="Ruta WHIP del servidor MediaMTX">/whip</span>
+          </div>
+          <p class="hint">Endpoint final: <code id="whipPreview">https://mtx.rcm1450.com/live/whip</code></p>
         </label>
         <label class="field">
           <span>Bearer Token (opcional)</span>

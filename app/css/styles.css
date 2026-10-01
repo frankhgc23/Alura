@@ -162,6 +162,26 @@ select:focus, input:focus { border-color: var(--accent); }
 .row-buttons.big { margin-top: 14px; }
 .row-buttons button { flex: 1; }
 .hint { color: var(--muted); font-size: 11.5px; margin: 10px 0 0; line-height: 1.45; }
+.hint code { font-family: var(--mono); font-size: 11px; color: var(--accent); word-break: break-all; }
+
+/* Campo de punto de montaje con prefijo/sufijo fijos del servidor WHIP */
+.input-affix { display: flex; align-items: stretch; gap: 0; }
+.input-affix .affix-prefix,
+.input-affix .affix-suffix {
+  display: flex; align-items: center; white-space: nowrap;
+  padding: 0 9px; font-size: 11.5px; font-family: var(--mono); color: var(--muted);
+  background: var(--panel-2, rgba(255,255,255,.04));
+  border: 1px solid var(--border, #2a2f3a);
+}
+.input-affix .affix-prefix { border-right: none; border-radius: 8px 0 0 8px; }
+.input-affix .affix-suffix { border-left: none; border-radius: 0 8px 8px 0; }
+.input-affix input { flex: 1; min-width: 0; border-radius: 0; }
+.input-affix + .hint { margin-top: 6px; }
+@media (max-width: 480px) {
+  .input-affix { flex-wrap: wrap; }
+  .input-affix .affix-prefix { width: 100%; border-radius: 8px 8px 0 0; border-right: 1px solid var(--border, #2a2f3a); border-bottom: none; justify-content: center; }
+  .input-affix .affix-suffix { display: none; } /* el endpoint ya se muestra en la previsualización */
+}
 .codec-support { font-size: 11.5px; color: var(--muted); margin: 8px 0 0; line-height: 1.5; }
 .codec-support b.ok { color: var(--ok); }
 .codec-support b.no { color: var(--bad); }
