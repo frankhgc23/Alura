@@ -130,7 +130,7 @@ select:focus, input:focus { border-color: var(--accent); }
   display: grid;
   grid-template-columns: minmax(330px, 400px) 1fr;
   gap: 18px;
-  padding: 18px 20px 40px;
+  padding: 18px 20px calc(96px + env(safe-area-inset-bottom)); /* espacio para el dock flotante */
   max-width: 1680px;
   margin: auto;
 }
@@ -326,16 +326,19 @@ input[type="range"] { width: 100%; accent-color: var(--primary); padding: 0; }
    columna con monitor prioritario, dock de acciones fijo y objetivos tactiles
    de >=44px. Los margenes seguros (notch/home) se resuelven con env().        */
 
-/* Dock de acciones (GO LIVE / DETENER). En movil/tablet es barra inferior
-   fija; en escritorio (>720px) se integra al final de la columna izquierda. */
+/* Dock de acciones (GO LIVE / DETENER). Barra INFERIOR FIJA y SIEMPRE visible
+   en CUALQUIER dispositivo: movil, tablet y escritorio/pantallas grandes.
+   En >720px se centra con ancho maximo tipo "pill" flotante. */
 .action-dock {
   position: fixed;
   left: 0; right: 0; bottom: 0;
   z-index: 40;
   display: flex;
+  justify-content: center;          /* centrado del pill en escritorio */
   gap: 10px;
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
   background: rgba(11, 16, 32, .92);
+  -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
   border-top: 1px solid var(--line);
 }
@@ -343,14 +346,11 @@ input[type="range"] { width: 100%; accent-color: var(--primary); padding: 0; }
 .action-dock .go-live { flex: 1.6; }
 
 @media (min-width: 721px) {
-  .action-dock {
-    position: static;
-    background: transparent;
-    backdrop-filter: none;
-    border-top: 0;
-    padding: 0;
-    margin: 0;
-  }
+  /* Escritorio: sigue flotante, pero como capsula centrada sobre el contenido */
+  .action-dock { padding-inline: max(18px, calc((100vw - 1680px) / 2 + 20px)); }
+  .action-dock::before { content: ""; }
+  .action-dock button { flex: 0 1 auto; min-width: 220px; }
+  .action-dock .go-live { flex: 0 1 auto; min-width: 300px; }
 }
 
 @media (max-width: 1024px) {
