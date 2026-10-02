@@ -18,7 +18,7 @@
 
 import { $, log, toast, hms } from "./utils.js";
 
-const DEFAULT_URL = "http://192.168.0.132:8888/live/index.m3u8";
+const DEFAULT_URL = "https://mtx.rcm1450.com/hls/audiovmix/index.m3u8";
 const MAX_AUTO_RETRIES = 5;      // reintentos automáticos ante errores de red
 const STALL_WATCHDOG_MS = 10_000; // si no avanza en 10 s → recarga suave
 
