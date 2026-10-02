@@ -1,9 +1,21 @@
+<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
 <title>RCM P2P Camera LAN · Producción</title>
+
+<!-- PWA -->
+<meta name="description" content="Cámara P2P en LAN basada en WebRTC/PeerJS con preferencia H.264/H.265, diagnóstico en vivo y grillas de encuadre.">
+<meta name="theme-color" content="#0b0f14">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RCM P2P Cam">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
 
 <style>
 :root {
@@ -101,6 +113,17 @@ header {
 .spacer { flex: 1; }
 
 .request-button { position: relative; }
+#pwa-install {
+    background: var(--accent);
+    color: #fff;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+#pwa-install:hover { filter: brightness(1.15); }
 
 .request-badge {
     position: absolute;
@@ -647,6 +670,7 @@ input[type="checkbox"] {
         <div class="small">LAN P2P · H.264 preferido · bitrate adaptativo</div>
         <div class="spacer"></div>
         <div id="wakeStatus" class="wake-status hidden">⚪ Pantalla</div>
+        <button id="pwa-install" class="btn small-btn" style="display:none" title="Instalar como aplicación">📲 Instalar app</button>
         <button id="requestButton" class="request-button hidden" onclick="toggleRequestPanel()">
             Solicitudes <span id="requestBadge" class="request-badge hidden">0</span>
         </button>
@@ -3340,6 +3364,52 @@ window.addEventListener("offline", () => { sessions.forEach(s => { if (s.desired
 document.addEventListener("keydown", event => { if (event.key === "Escape" && document.fullscreenElement) document.exitFullscreen().catch(() => {}); });
 
 init();
+
+// === PWA: registro de Service Worker e instalación ===
+let deferredPrompt = null;
+
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js')
+            .then(reg => {
+                console.log('[PWA] Service Worker registrado, scope:', reg.scope);
+            })
+            .catch(err => {
+                console.warn('[PWA] Fallo al registrar Service Worker:', err);
+                const b = document.getElementById('pwa-install');
+                if (b) b.style.display = 'none';
+            });
+    });
+} else {
+    const b = document.getElementById('pwa-install');
+    if (b) b.style.display = 'none';
+}
+
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    const b = document.getElementById('pwa-install');
+    if (b) b.style.display = '';
+});
+
+document.getElementById('pwa-install').addEventListener('click', async () => {
+    const btn = document.getElementById('pwa-install');
+    if (deferredPrompt) {
+        deferredPrompt.prompt();
+        const choice = await deferredPrompt.userChoice;
+        if (choice.outcome === 'accepted') btn.style.display = 'none';
+        deferredPrompt = null;
+    } else {
+        // iOS / navegadores sin beforeinstallprompt: mostrar instrucciones
+        alert('Para instalar esta app:\n\nAndroid/Chrome: menú ⋮ → "Instalar aplicación" o "Agregar a pantalla de inicio".\niOS/Safari: botón Compartir → "Agregar a pantalla de inicio".\n\nNota: la app debe servirse por HTTPS (o http://localhost) para poder instalarse.');
+    }
+});
+
+window.addEventListener('appinstalled', () => {
+    const b = document.getElementById('pwa-install');
+    if (b) b.style.display = 'none';
+    deferredPrompt = null;
+});
 
 </script>
 </body>
