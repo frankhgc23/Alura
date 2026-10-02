@@ -441,3 +441,10 @@ input[type="range"] { width: 100%; accent-color: var(--primary); padding: 0; }
   .topbar { padding-top: max(12px, env(safe-area-inset-top)); }
   .action-dock { padding-bottom: calc(10px + max(env(safe-area-inset-bottom), 6px)); }
 }
+
+/* Retorno: botón VU con estado activo */
+#cardReturn .row-buttons button.active {
+  border-color: var(--accent, #4da3ff);
+  color: var(--accent, #4da3ff);
+  box-shadow: 0 0 0 1px var(--accent, #4da3ff) inset;
+}

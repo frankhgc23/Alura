@@ -212,6 +212,7 @@
         <div class="row-buttons">
           <button id="btnReturnPlay" class="primary">▶ Play</button>
           <button id="btnReturnStop" class="ghost" disabled>■ Stop</button>
+          <button id="btnReturnMeter" class="ghost" title="Activa el vúmetro Web Audio (requiere CORS en MediaMTX)">VU</button>
         </div>
 
         <div class="return-status-row">
@@ -232,7 +233,9 @@
 
         <p class="hint" id="returnHint">La fuente <b>no se conecta</b> hasta pulsar Play, y se libera
           totalmente al pulsar Stop (sin consumo de ancho de banda en reposo). Motor: hls.js (MSE) con
-          fallback nativo en Safari/iOS.</p>
+          fallback nativo en Safari/iOS. El vúmetro es opcional (botón VU): requiere CORS en MediaMTX
+          (<code>httpAllowOrigin: "*"</code>). Si abres la app por HTTPS, el stream HTTP LAN queda
+          bloqueado como <i>mixed content</i>: usa la app por <code>http://IP-LAN</code> o expón HLS por HTTPS.</p>
         <audio id="returnAudio" preload="none" playsinline></audio>
       </section>
 
