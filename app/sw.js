@@ -9,7 +9,7 @@
  *    para no interferir con la señalización ni la ingesta.
  */
 
-const VERSION = "whip-studio-v4";
+const VERSION = "whip-studio-v5";
 const SHELL_CACHE = `${VERSION}-shell`;
 const SHELL_ASSETS = [
   "./",

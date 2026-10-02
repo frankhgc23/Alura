@@ -215,6 +215,12 @@
           <div class="stat"><span>RECONNECTS</span><b id="stRetries">0</b></div>
         </div>
       </section>
+
+      <!-- Registro del emisor (debajo de Estadísticas) -->
+      <div class="status-log-wrap card" id="cardLog">
+        <h2 class="card-title"><span class="tick"></span>Registro del emisor</h2>
+        <ul class="log" id="logList" aria-live="polite"></ul>
+      </div>
     </aside>
 
     <!-- ======================= COLUMNA CENTRAL: MONITOR ======================= -->
@@ -259,11 +265,6 @@
           <span class="mt-spacer"></span>
           <span class="mt-zoom" id="zoomLabel">Zoom 1.0×</span>
         </div>
-      </div>
-
-      <div class="status-log-wrap card">
-        <h2 class="card-title"><span class="tick"></span>Registro del emisor</h2>
-        <ul class="log" id="logList" aria-live="polite"></ul>
       </div>
     </section>
   </main>
