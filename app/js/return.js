@@ -50,6 +50,8 @@ export class ReturnMonitor {
     this.retries = 0;
     this.nativeMode = false;
     this.running = false;
+    this._playSeq = 0;          // secuencia Play/Stop: invalida plays en cola
+    this._meterFailed = false;  // vúmetro ya falló → no reintentar (evita spam)
 
     if (this.el.url && !this.el.url.value) this.el.url.value = DEFAULT_URL;
     this._bind();
@@ -66,8 +68,10 @@ export class ReturnMonitor {
   }
 
   _bind() {
-    this.el.play?.addEventListener("click", () => this.start());
-    this.el.stop?.addEventListener("click", () => this.stop());
+    // Stop se gestiona con captura + once: si un Play pendiente quedó en cola,
+    // se cancela antes de liberar recursos (evita "resucitar" tras Stop).
+    this.el.play?.addEventListener("click", () => { this._playSeq++; this.start(); });
+    this.el.stop?.addEventListener("click", () => { this._playSeq++; this.stop(); }, true);
     this.el.vol?.addEventListener("input", () => this._setVolume(+this.el.vol.value));
     // Pausa inteligente: si el operador oculta la pestaña, corta el retorno.
     document.addEventListener("visibilitychange", () => {
@@ -133,7 +137,7 @@ export class ReturnMonitor {
 
     h.on(Hls.Events.MANIFEST_PARSED, (_e, data) => {
       log(`Retorno: manifiesto OK (${data.levels.length} variante(s))`, "ok");
-      this.el.audio.play?.().then(() => this._onPlaying()).catch((err) => {
+      this.el.audio.play?.().then(() => this._onPlaying(this._playSeq)).catch((err) => {
         // Autoplay bloqueado: un click ya ocurrió sobre Play, pero iOS a veces
         // exige gesto extra → reintento diferido y aviso claro.
         log(`Retorno: play bloqueado (${err.name}). Pulse Play de nuevo.`, "warn");
@@ -163,13 +167,13 @@ export class ReturnMonitor {
 
   _wireElementEvents() {
     const v = this.el.audio;
-    v.oncanplay = () => { v.play?.().then(() => this._onPlaying()).catch(() => {}); };
+    v.oncanplay = () => { const s = this._playSeq; v.play?.().then(() => this._onPlaying(s)).catch(() => {}); };
     v.onerror = () => this._retry("fallo de reproducción nativa", () => this._softReload());
     v.onstalled = () => this._retry("señal estancada (stalled)", () => this._softReload());
   }
 
-  _onPlaying() {
-    if (!this.running) return;
+  _onPlaying(seq) {
+    if (!this.running || seq !== this._playSeq) return;   // play de una sesión ya cerrada
     this.retries = 0;
     this._setState(this.nativeMode ? "EN AIRE · NATIVO" : "EN AIRE · HLS.JS", "ok");
     this._setupMeter().catch(() => {});   // el vúmetro es best-effort
@@ -273,12 +277,42 @@ export class ReturnMonitor {
 
   /* ------------------------------ Vúmetro R ------------------------------- */
 
+  /**
+   * El <audio> es un elemento ESTÁTICO del HTML: si alguna vez se le creó un
+   * MediaElementSourceNode, ese vínculo es permanente e irreversible — un
+   * segundo createMediaElementSource lanza InvalidStateError. Además, los
+   * streams HLS sin cabeceras CORS "taintean" el elemento y Web Audio se
+   * niega a medirlos. Estrategia robusta:
+   *   1) Solo intentar una vez por sesión de vida del elemento.
+   *   2) Antes de crear el nodo, probar fetch(url): si no expone ACAO, no lo
+   *      intentamos siquiera (evita el mensaje de error en cada Play).
+   *   3) Si algo falla, degradar limpiamente a "sin medición" con volumen por
+   *      elemento; nunca se interrumpe el audio.
+   */
   async _setupMeter() {
-    if (this.analyser || !window.AudioContext && !window.webkitAudioContext) return;
+    if (this.analyser || this._meterFailed) return;
     const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+
+    // Comprobación CORS best-effort: sin ACAO, Web Audio no podrá medir.
+    try {
+      const url = (this.el.url?.value || "").trim();
+      if (url) {
+        const res = await fetch(url, { method: "GET", mode: "cors", signal: AbortSignal.timeout(4000) });
+        const ct = res.headers.get("content-type") || "";
+        res.body?.cancel?.().catch(() => {});
+        if (/text\/html/i.test(ct)) throw new Error("respuesta HTML (proxy/Captive), no HLS");
+      }
+    } catch {
+      this._meterFailed = true;
+      log("Retorno: stream sin CORS → vúmetro desactivado (audio OK)", "info");
+      return;
+    }
+
     try {
       this.ctx = new AC();
       this.srcNode = this.ctx.createMediaElementSource(this.el.audio);
+      this._meterBound = true;               // vínculo elemento↔nodo: permanente
       this.analyser = this.ctx.createAnalyser();
       this.analyser.fftSize = 1024;
       this.gain = this.ctx.createGain();
@@ -290,8 +324,7 @@ export class ReturnMonitor {
       await this.ctx.resume().catch(() => {});
       this._meterLoop();
     } catch (err) {
-      // createMediaElementSource lanza si el recurso está tainted (sin CORS):
-      // seguimos reproduciendo audio, solo perdemos la medición.
+      this._meterFailed = true;              // no reintentar en próximos Plays
       log(`Retorno: vúmetro no disponible (${err.message}); audio en marcha`, "warn");
       this._destroyGraphQuietly();
     }
@@ -300,7 +333,7 @@ export class ReturnMonitor {
   _destroyGraphQuietly() {
     try { this.srcNode?.disconnect(); } catch { /* noop */ }
     this.srcNode = this.analyser = this.gain = null;
-    this.ctx?.close().catch(() => {});
+    if (this.ctx && this.ctx.state !== "closed") this.ctx.close().catch(() => {});
     this.ctx = null;
   }
 
