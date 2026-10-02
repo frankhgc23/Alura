@@ -9,7 +9,7 @@
  *    para no interferir con la señalización ni la ingesta.
  */
 
-const VERSION = "whip-studio-v5";
+const VERSION = "whip-studio-v6";
 const SHELL_CACHE = `${VERSION}-shell`;
 const SHELL_ASSETS = [
   "./",
@@ -23,6 +23,8 @@ const SHELL_ASSETS = [
   "./js/whip.js",
   "./js/stats.js",
   "./js/hud.js",
+  "./js/return.js",
+  "./vendor/hls.min.js",
   "./manifest.webmanifest",
   "./icons/icon.svg",
 ];

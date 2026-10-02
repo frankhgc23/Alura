@@ -287,6 +287,22 @@ input[type="range"] { width: 100%; accent-color: var(--primary); padding: 0; }
 }
 .clip-banner[hidden] { display: none; }
 
+/* --------------------- Retorno de audio (N-1) · HLS.js -------------------- */
+.return-status-row { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
+.pill-state {
+  font: 700 10.5px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line);
+}
+.pill-state.idle { background: rgba(143,155,181,.12); color: var(--muted); }
+.pill-state.ok   { background: rgba(50,213,131,.14);  color: #7ef0b4; border-color: rgba(50,213,131,.4); }
+.pill-state.warn { background: rgba(253,176,34,.14);  color: #ffd27d; border-color: rgba(253,176,34,.4); }
+.pill-state.bad  { background: rgba(249,112,102,.16); color: #ffb4ad; border-color: rgba(249,112,102,.4); }
+.mono { font-family: var(--mono); }
+.return-time { font-size: 13px; color: var(--muted); }
+.return-vu { margin-top: 12px; }
+.return-vol { margin: 14px 0 0; }
+#returnAudio { display: none; }
+
 /* ---------------------------- Estadísticas ------------------------------- */
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
 .stat {

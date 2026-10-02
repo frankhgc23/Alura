@@ -10,6 +10,7 @@ import { AudioProcessor } from "./audio.js";
 import { WhipPublisher } from "./whip.js";
 import { StatsCollector } from "./stats.js";
 import { BroadcastHud } from "./hud.js";
+import { ReturnMonitor } from "./return.js";
 import { detectCodecSupport } from "./sdp.js";
 
 /* ------------------------------- Estado ---------------------------------- */
@@ -115,7 +116,22 @@ function persist() {
     vbit: +els.vbit.value, abit: +els.abit.value,   // se guarda el índice
     aCodec: els.aCodec.value, vCodec: els.vCodec.value, hpf: els.hpf.value,
     audioOnly: els.audioOnly.checked,
+    returnUrl: $("#returnUrl")?.value || "", returnVol: $("#returnVol")?.value || "100",
   });
+}
+
+/* --------------------- Retorno de audio (N-1) vía HLS.js ------------------ */
+/* Fuente bajo demanda: sin conexión hasta Play; Stop libera todos los recursos. */
+new ReturnMonitor();
+{
+  const savedUrl = cfg.returnUrl || "";
+  if (savedUrl && $("#returnUrl")) $("#returnUrl").value = savedUrl;
+  if (cfg.returnVol && $("#returnVol")) {
+    $("#returnVol").value = cfg.returnVol;
+    $("#returnVol").dispatchEvent(new Event("input"));
+  }
+  $("#returnUrl")?.addEventListener("change", () => persist());
+  $("#returnVol")?.addEventListener("change", () => persist());
 }
 
 /* ------------------------- Dispositivos / captura ------------------------- */

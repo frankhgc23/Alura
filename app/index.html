@@ -199,6 +199,43 @@
         <div class="clip-banner" id="clipBanner" hidden>⚠ CLIPPING — reduzca la ganancia de entrada</div>
       </section>
 
+      <!-- Retorno de audio (N-1) · HLS bajo demanda -->
+      <section class="card" id="cardReturn">
+        <h2 class="card-title"><span class="tick"></span>Retorno de audio (N‑1)</h2>
+
+        <label class="field">
+          <span>URL del stream (HLS .m3u8)</span>
+          <input type="url" id="returnUrl" autocomplete="off" spellcheck="false"
+                 placeholder="http://192.168.0.132:8888/live/index.m3u8">
+        </label>
+
+        <div class="row-buttons">
+          <button id="btnReturnPlay" class="primary">▶ Play</button>
+          <button id="btnReturnStop" class="ghost" disabled>■ Stop</button>
+        </div>
+
+        <div class="return-status-row">
+          <span class="pill-state idle" id="returnState">DESCONECTADO</span>
+          <span class="return-time mono" id="returnTime">00:00:00</span>
+        </div>
+
+        <div class="vu-ch return-vu">
+          <span class="vu-label">R</span>
+          <div class="vu-meter"><div class="vu-fill" id="returnVu"></div></div>
+          <span class="vu-db mono" id="returnDb">-∞ dB</span>
+        </div>
+
+        <label class="field range-field return-vol">
+          <span>Volumen retorno <output id="returnVolOut">100 %</output></span>
+          <input type="range" id="returnVol" min="0" max="100" value="100" step="1">
+        </label>
+
+        <p class="hint" id="returnHint">La fuente <b>no se conecta</b> hasta pulsar Play, y se libera
+          totalmente al pulsar Stop (sin consumo de ancho de banda en reposo). Motor: hls.js (MSE) con
+          fallback nativo en Safari/iOS.</p>
+        <audio id="returnAudio" preload="none" playsinline></audio>
+      </section>
+
       <!-- Estadísticas -->
       <section class="card" id="cardStats">
         <h2 class="card-title"><span class="tick"></span>Estadísticas en tiempo real</h2>
@@ -279,6 +316,10 @@
   <div class="toast-stack" id="toasts"></div>
 
   <noscript>Esta aplicación requiere JavaScript habilitado.</noscript>
+  <!-- hls.js (Motor MSE para streams .m3u8 en navegadores que no tienen HLS nativo,
+       p. ej. Chrome/Firefox/Edge en escritorio y Android). Se sirve en local para
+       que la PWA funcione también sin conexión y sin depender del CDN. -->
+  <script src="vendor/hls.min.js"></script>
   <script type="module" src="js/main.js"></script>
 </body>
 </html>
