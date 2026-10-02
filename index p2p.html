@@ -534,6 +534,19 @@ input[type="checkbox"] {
     right: 45%;
     border-top: 1px solid rgba(255,255,255,.4);
 }
+/* Marco / guía de encuadre configurable (regla de tercios y márgenes seguros) */
+.frame-guide {
+    position: absolute;
+    pointer-events: none;
+    z-index: 5;
+    border: 1.5px dashed var(--accent, #4da3ff);
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, .18); /* oscurece el área exterior al marco */
+    display: none;
+    transition: opacity .15s ease;
+}
+.frame-guide.active { display: block; }
+.frame-guides-hidden .frame-guide,
+.frame-guides-hidden .safe-grid { opacity: 0; }
 .grid-controls {
     display: flex;
     flex-wrap: wrap;
@@ -683,6 +696,7 @@ input[type="checkbox"] {
                         <span id="localConnectionBadge" class="live-badge">Sin receptores</span>
                     </div>
                     <div id="localSafeGrid" class="safe-grid thirds"></div>
+                    <div id="localFrameGuide" class="frame-guide"></div>
                     <div class="video-controls">
                         <button id="localMuteButton" onclick="toggleLocalMute()" title="Silenciar micrófono">🎙️</button>
                         <button onclick="cycleCamera()" title="Cambiar cámara">🔄</button>
@@ -735,7 +749,6 @@ input[type="checkbox"] {
                             <option value="15">15</option>
                             <option value="24">24</option>
                             <option value="30" selected>30</option>
-                            <option value="60">60</option>
                         </select>
                     </div>
                     <div class="control-group">
@@ -758,8 +771,9 @@ input[type="checkbox"] {
                     </div>
                     <div class="control-group">
                         <label>Codec preferido</label>
-                        <select id="codecSelect">
+                        <select id="codecSelect" onchange="onCodecPreferenceChange()">
                             <option value="H264" selected>H.264 (preferido)</option>
+                            <option value="H265">H.265 / HEVC</option>
                         </select>
                     </div>
                 </div>
@@ -770,10 +784,33 @@ input[type="checkbox"] {
                         <option value="">Seleccionar perfil...</option>
                         <option value="low">Bajo · 360p / 15 FPS / 800 Kbps</option>
                         <option value="medium">Medio · 480p / 24 FPS / 1.2 Mbps</option>
-                        <option value="hd" selected>HD · 720p / 30 FPS / 2.5 Mbps</option>
-                        <option value="hd60">HD 60 · 720p / 60 FPS / 4 Mbps</option>
+                        <option value="hd">HD · 720p / 30 FPS / 2.5 Mbps</option>
                         <option value="fullhd">Full HD · 1080p / 30 FPS / 4 Mbps</option>
                     </select>
+                </div>
+                <div style="height:10px"></div>
+                <div class="control-group">
+                    <label>Guía de encuadre (marco)</label>
+                    <select id="frameGuideSelect" onchange="applyFrameStyle(this.value)">
+                        <option value="">Sin marco</option>
+                        <option value="thirds">Regla de tercios</option>
+                        <option value="safe90">Zona segura 90%</option>
+                        <option value="safe80">Zona segura 80%</option>
+                        <option value="center">Marco central 50%</option>
+                        <option value="custom">Personalizado…</option>
+                    </select>
+                    <div id="frameCustomRow" style="display:none; margin-top:8px; gap:8px;">
+                        <label class="small" style="flex:1">Ancho %
+                            <input id="frameWidthInput" type="range" min="20" max="100" value="80" oninput="applyFrameStyle('custom')">
+                        </label>
+                        <label class="small" style="flex:1">Alto %
+                            <input id="frameHeightInput" type="range" min="20" max="100" value="80" oninput="applyFrameStyle('custom')">
+                        </label>
+                    </div>
+                    <label style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;color:var(--text)">
+                        <input id="frameGuidesToggle" type="checkbox" checked onchange="toggleFrameGuidesVisibility(this.checked)" style="width:auto">
+                        Mostrar guías sobre el video
+                    </label>
                 </div>
                 <div style="height:10px"></div>
                 <div class="actions">
@@ -839,10 +876,10 @@ input[type="checkbox"] {
         </div>
         <div style="height:10px"></div>
         <div class="grid-controls">
-            <button class="compact-button" onclick="setGridMode('none')">Grid OFF</button>
-            <button class="compact-button active" onclick="setGridMode('thirds')">Terceros</button>
-            <button class="compact-button" onclick="setGridMode('safe')">Márgenes</button>
-            <button class="compact-button" onclick="setGridMode('center')">Centro</button>
+            <button class="compact-button" data-grid-mode="none" onclick="setGridMode('none')">Grid OFF</button>
+            <button class="compact-button active" data-grid-mode="thirds" onclick="setGridMode('thirds')">Terceros</button>
+            <button class="compact-button" data-grid-mode="safe" onclick="setGridMode('safe')">Márgenes</button>
+            <button class="compact-button" data-grid-mode="center" onclick="setGridMode('center')">Centro</button>
             <button class="compact-button" onclick="toggleDiagnostics()">🔧 Ver diagnóstico</button>
         </div>
         <div id="diagnosticPanelGlobal" class="hidden" style="margin-top:12px">
@@ -931,37 +968,74 @@ const ADAPTIVE_COOLDOWN = 4000;
 
 
 /* ================================================================
-   PREFERENCIA DE CÓDEC H.264
+   PREFERENCIA DE CÓDEC (H.264 / H.265)
 ================================================================ */
-function preferH264Sdp(sdp) {
+let preferredCodec = localStorage.getItem("rcm_codec") || "H264";
+
+function getPreferredCodecName() {
+    return preferredCodec === "H265" ? "H265" : "H264";
+}
+
+// Reordena los payload types del códec preferido al inicio del m=video,
+// conservando el resto de codecs como fallback de negociación.
+function preferCodecSdp(sdp, codecRegex) {
     if (!sdp) return sdp;
 
     const lines = sdp.split("\r\n");
     const videoIndex = lines.findIndex(line => line.startsWith("m=video"));
     if (videoIndex < 0) return sdp;
 
-    const h264Payloads = [];
+    const preferredPayloads = [];
     for (const line of lines) {
-        if (line.startsWith("a=rtpmap:") && /H264\/90000/i.test(line)) {
+        if (line.startsWith("a=rtpmap:") && codecRegex.test(line)) {
             const match = line.match(/^a=rtpmap:(\d+)/);
-            if (match) h264Payloads.push(match[1]);
+            if (match) preferredPayloads.push(match[1]);
         }
     }
 
-    if (!h264Payloads.length) return sdp;
+    if (!preferredPayloads.length) return sdp;
 
     const parts = lines[videoIndex].split(" ");
     const header = parts.slice(0, 3);
     const payloads = parts.slice(3);
-    const h264 = payloads.filter(p => h264Payloads.includes(p));
-    const others = payloads.filter(p => !h264Payloads.includes(p));
-    lines[videoIndex] = [...header, ...h264, ...others].join(" ");
+    const preferred = payloads.filter(p => preferredPayloads.includes(p));
+    const others = payloads.filter(p => !preferredPayloads.includes(p));
+    lines[videoIndex] = [...header, ...preferred, ...others].join(" ");
     return lines.join("\r\n");
+}
+
+function preferH264Sdp(sdp) {
+    return preferCodecSdp(sdp, /H264\/90000/i);
+}
+
+function preferH265Sdp(sdp) {
+    // HEVC puede anunciarse con clockrate 90000 o "90000/2".
+    return preferCodecSdp(sdp, /H265\/90000(\/2)?/i);
+}
+
+// Transformador activo según la preferencia del usuario: si el navegador
+// o el par no soporta el códec elegido, la SDP conserva todos los demás
+// codecs y la negociación cae a un fallback automáticamente.
+function codecSdpTransform(sdp) {
+    return getPreferredCodecName() === "H265" ? preferH265Sdp(sdp) : preferH264Sdp(sdp);
+}
+
+function onCodecPreferenceChange() {
+    const value = document.getElementById("codecSelect")?.value;
+    preferredCodec = value === "H265" ? "H265" : "H264";
+    try { localStorage.setItem("rcm_codec", preferredCodec); } catch (_) {}
+    if (getPreferredCodecName() === "H265") {
+        toast("H.265 seleccionado: requiere que ambos navegadores soporten HEVC; si no, se usará H.264 u otro códec automáticamente.", "warning");
+    } else {
+        toast("H.264 establecido como códec preferido.", "success");
+    }
+    log(`Códec preferido cambiado a ${getPreferredCodecName()}. Se aplicará en las próximas negociaciones.`);
 }
 
 function applyH264Preferences(_pc) {
     // Intencionalmente no se fuerza setCodecPreferences().
-    // preferH264Sdp() solo reordena H.264 y conserva fallback de codecs.
+    // El transformador SDP solo reordena el códec preferido y conserva
+    // el fallback de codecs para la negociación.
 }
 
 /* ================================================================
@@ -1549,13 +1623,13 @@ function startCameraCall(peerId) {
         call = peer.call(peerId, localStream, {
             metadata: {
                 type: "rcm-camera",
-                codec: "H264",
+                codec: getPreferredCodecName(),
                 generation,
                 ts: now()
             },
-            // PeerJS applies this to the SDP offer/answer. We only reorder
-            // codecs so H.264 is preferred; other codecs are not removed.
-            sdpTransform: preferH264Sdp
+            // PeerJS aplica esto a la oferta/respuesta SDP. Solo reordena
+            // el códec preferido; los demás codecs quedan como fallback.
+            sdpTransform: codecSdpTransform
         });
     } catch (error) {
         log(`Error creando llamada WebRTC: ${error.message}`);
@@ -1623,7 +1697,7 @@ function handleIncomingCall(call) {
     registerIncomingCall(peerId, call, generation);
 
     try {
-        call.answer(null, { sdpTransform: preferH264Sdp });
+        call.answer(null, { sdpTransform: codecSdpTransform });
     } catch (error) {
         log(`Error respondiendo llamada: ${error.message}`);
         if (isSessionGenerationCurrent(peerId, generation)) {
@@ -2198,7 +2272,6 @@ const QUALITY_PROFILES = {
     low:    { height: 360, fps: 15, bitrate: 800000 },
     medium: { height: 480, fps: 24, bitrate: 1200000 },
     hd:     { height: 720, fps: 30, bitrate: 2500000 },
-    hd60:   { height: 720, fps: 60, bitrate: 4000000 },
     fullhd: { height: 1080, fps: 30, bitrate: 4000000 }
 };
 
@@ -2207,7 +2280,11 @@ function applyQualityProfile() {
     const profile = QUALITY_PROFILES[key];
     if (!profile) return;
     document.getElementById("resolutionSelect").value = String(profile.height);
-    document.getElementById("fpsSelect").value = String(profile.fps);
+    // Si un perfil persistido en localStorage pedía 60 FPS (opción retirada),
+    // se limita al máximo disponible (30).
+    const fpsSelect = document.getElementById("fpsSelect");
+    const maxFps = Math.max(...[...fpsSelect.options].map(o => Number(o.value)));
+    fpsSelect.value = String(Math.min(profile.fps, maxFps));
     document.getElementById("bitrateSelect").value = String(profile.bitrate);
     const adaptiveToggle = document.getElementById("adaptiveBitrateToggle");
     adaptiveBitrateEnabled = adaptiveToggle ? adaptiveToggle.checked : adaptiveBitrateEnabled;
@@ -2236,30 +2313,139 @@ function toggleLocalMute() {
 function toggleGrid() {
     const grid = document.getElementById("localSafeGrid");
     if (!grid) return;
-    grid.classList.toggle("active");
+    // Alterna entre el modo activo y "off", persistiendo la preferencia.
+    setGridMode(grid.classList.contains("active") ? "none" : (lastGridMode || "thirds"));
 }
+
+let lastGridMode = localStorage.getItem("rcm_grid") || "thirds";
 
 function setGridMode(mode) {
     const grid = document.getElementById("localSafeGrid");
     if (!grid) return;
+    lastGridMode = mode;
+    try { localStorage.setItem("rcm_grid", mode); } catch (_) {}
     grid.classList.remove("thirds", "safe-area", "center", "active");
     if (mode === "thirds") grid.classList.add("thirds", "active");
     if (mode === "safe") grid.classList.add("safe-area", "active");
     if (mode === "center") grid.classList.add("center", "active");
 
-    document.querySelectorAll(".grid-controls button").forEach(btn => btn.classList.remove("active"));
-    const buttons = [...document.querySelectorAll(".grid-controls button")];
-    const target = buttons.find(b => b.textContent.toLowerCase().includes(
-        mode === "none" ? "off" : mode === "thirds" ? "terceros" : mode === "safe" ? "márgenes" : "centro"
-    ));
-    if (target) target.classList.add("active");
+    // Optimización: los botones llevan data-grid-mode, así no se compara
+    // el textContent (que depende del idioma de la etiqueta).
+    document.querySelectorAll(".grid-controls button[data-grid-mode]").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.gridMode === mode);
+    });
 }
 
 function setQualityBanner(level, text) {
     const banner = document.getElementById("globalQualityBanner");
     if (!banner) return;
+    const dotHtml = '<span class="dot"></span>';
+    // Optimización: si el nivel no cambia, solo actualizar el texto (evita
+    // reescribir el HTML completo y recrear nodos en cada ciclo de stats).
+    if (banner.dataset.level === (level || "")) {
+        const textSpan = banner.lastElementChild;
+        if (textSpan && textSpan.textContent !== text) textSpan.textContent = text;
+        return;
+    }
+    banner.dataset.level = level || "";
     banner.className = `status-banner ${level || ""}`;
-    banner.innerHTML = `<span class="dot"></span><span>${escapeHtml(text)}</span>`;
+    banner.innerHTML = `${dotHtml}<span>${escapeHtml(text)}</span>`;
+}
+
+/* ================================================================
+   GUÍAS DE ENCUADRE (MARCO CONFIGURABLE)
+   Dibuja un marco guía sobre la vista previa local: regla de tercios,
+   zonas seguras o un marco personalizado con sliders. No afecta al
+   stream transmitido (es solo ayuda visual de encuadre).
+================================================================ */
+const FRAME_PRESETS = {
+    thirds:  { width: 100, height: 100 },
+    safe90:  { width: 90,  height: 90 },
+    safe80:  { width: 80,  height: 80 },
+    center:  { width: 50,  height: 50 },
+};
+let currentFrameStyle = "";
+
+function applyFrameStyle(style) {
+    const guide = document.getElementById("localFrameGuide");
+    const customRow = document.getElementById("frameCustomRow");
+    if (!guide) return;
+    currentFrameStyle = style || "";
+
+    let widthPct = 0, heightPct = 0;
+    if (style === "custom") {
+        widthPct = Number(document.getElementById("frameWidthInput")?.value || 80);
+        heightPct = Number(document.getElementById("frameHeightInput")?.value || 80);
+    } else if (FRAME_PRESETS[style]) {
+        widthPct = FRAME_PRESETS[style].width;
+        heightPct = FRAME_PRESETS[style].height;
+    }
+
+    if (customRow) customRow.style.display = style === "custom" ? "flex" : "none";
+
+    if (!style || !widthPct || !heightPct) {
+        guide.classList.remove("active");
+        guide.removeAttribute("style");
+        saveFramePreferences();
+        return;
+    }
+
+    const insetX = (100 - widthPct) / 2;
+    const insetY = (100 - heightPct) / 2;
+    guide.style.left = `${insetX}%`;
+    guide.style.top = `${insetY}%`;
+    guide.style.width = `${widthPct}%`;
+    guide.style.height = `${heightPct}%`;
+
+    // Regla de tercios: líneas internas además del borde exterior.
+    if (style === "thirds") {
+        guide.style.borderStyle = "solid";
+        guide.style.background =
+            "linear-gradient(to right, transparent calc(33.333% - 1px), rgba(255,255,255,.35) 33.333%, transparent calc(33.333% + 1px))," +
+            "linear-gradient(to right, transparent calc(66.666% - 1px), rgba(255,255,255,.35) 66.666%, transparent calc(66.666% + 1px))," +
+            "linear-gradient(to bottom, transparent calc(33.333% - 1px), rgba(255,255,255,.35) 33.333%, transparent calc(33.333% + 1px))," +
+            "linear-gradient(to bottom, transparent calc(66.666% - 1px), rgba(255,255,255,.35) 66.666%, transparent calc(66.666% + 1px))";
+    } else {
+        guide.style.borderStyle = "dashed";
+        guide.style.background = "transparent";
+    }
+    guide.classList.add("active");
+    saveFramePreferences();
+}
+
+// Persistencia de preferencias de guía de encuadre (localStorage).
+let frameSaveTimer = null;
+function saveFramePreferences() {
+    clearTimeout(frameSaveTimer);
+    frameSaveTimer = setTimeout(() => {
+        try {
+            localStorage.setItem("rcm_frame", JSON.stringify({
+                style: currentFrameStyle,
+                width: document.getElementById("frameWidthInput")?.value || "",
+                height: document.getElementById("frameHeightInput")?.value || ""
+            }));
+        } catch (_) {}
+    }, 300);
+}
+
+function restoreFramePreferences() {
+    let prefs = null;
+    try { prefs = JSON.parse(localStorage.getItem("rcm_frame") || "null"); } catch (_) {}
+    if (!prefs || !prefs.style) return;
+    const select = document.getElementById("frameGuideSelect");
+    if (!select) return;
+    if (![...select.options].some(o => o.value === prefs.style)) return;
+    if (prefs.style === "custom") {
+        if (prefs.width) document.getElementById("frameWidthInput").value = prefs.width;
+        if (prefs.height) document.getElementById("frameHeightInput").value = prefs.height;
+    }
+    select.value = prefs.style;
+    applyFrameStyle(prefs.style);
+}
+
+function toggleFrameGuidesVisibility(visible) {
+    const container = document.getElementById("localVideoContainer");
+    if (container) container.classList.toggle("frame-guides-hidden", !visible);
 }
 
 function updateProductionMetric(id, value) {
@@ -2599,7 +2785,13 @@ document.addEventListener("fullscreenchange", () => {
 function startHUDMonitor() {
     if (statsMonitorTimer) return;
 
-    statsMonitorTimer = setInterval(collectWebRTCStats, statsMonitorIntervalMs);
+    statsMonitorTimer = setInterval(() => {
+        // Optimización: no ejecutar getStats cuando la pestaña está oculta
+        // (los navegadores ya limitan los timers, pero esto evita trabajo
+        // innecesario y consumo de batería en segundo plano).
+        if (document.hidden) return;
+        collectWebRTCStats();
+    }, statsMonitorIntervalMs);
     collectWebRTCStats();
 }
 
@@ -2736,7 +2928,10 @@ async function collectWebRTCStats() {
                 width = Math.max(width, r.frameWidth || 0);
                 height = Math.max(height, r.frameHeight || 0);
                 jitter = Math.max(jitter, (r.jitter || 0) * 1000);
-                codec = parseCodec(reports, r) !== "--" ? parseCodec(reports, r) : codec;
+                // Optimización: parseCodec una sola vez por reporte
+                // (antes se invocaba dos veces por iteración).
+                const parsedCodec = parseCodec(reports, r);
+                if (parsedCodec !== "--") codec = parsedCodec;
             }
 
             const pair = getSelectedCandidatePair(reports);
@@ -2761,6 +2956,8 @@ async function collectWebRTCStats() {
                 }
             }
 
+            // Optimización: bitrate por delta entre ciclos, usando el total acumulado
+            // de bytes del/de los reporte(s) RTP de video de este peer.
             const previous = statsBytesByPeer.get(peerId);
             let bitrateKbps = 0;
             if (previous && bytes >= previous.bytes && currentTime > previous.time) {
@@ -2826,7 +3023,7 @@ async function collectWebRTCStats() {
     updateProductionMetric("prodLoss", `${worstLoss.toFixed(2)}%`);
     updateProductionMetric("prodJitter", maxJitter ? `${maxJitter.toFixed(1)} ms` : "--");
     updateProductionMetric("prodCodec", activeCodec);
-    document.getElementById("statCodec").textContent = activeCodec === "--" ? "H264" : activeCodec;
+    document.getElementById("statCodec").textContent = activeCodec === "--" ? getPreferredCodecName() : activeCodec;
 
     if (hasConnections) {
         if (worstRtt > 150 || worstLoss > 5) {
@@ -3121,7 +3318,14 @@ function init() {
         if (peer && peer.open && currentMode === "receive") discoverPeers();
     }, 30000);
     startHUDMonitor();
-    setGridMode("thirds");
+    // Restaurar preferencias persistidas (grid, guía de encuadre, códec).
+    setGridMode(lastGridMode);
+    restoreFramePreferences();
+    const codecSelect = document.getElementById("codecSelect");
+    if (codecSelect) {
+        codecSelect.value = getPreferredCodecName();
+        preferredCodec = codecSelect.value === "H265" ? "H265" : "H264";
+    }
     activateReceivingMode();
 }
 
