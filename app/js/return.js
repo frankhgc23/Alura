@@ -11,8 +11,9 @@
  *  - Al pulsar Stop se destruye la instancia Hls (aborta todas las peticiones),
  *    se limpia src/load() del elemento y se liberan sockets, decodificador y
  *    búferes: cero consumo de ancho de banda mientras no se escuche.
- *  - Vúmetro opcional vía Web Audio (AnalyserNode). Si el stream no envía
- *    CORS (`crossOrigin` falla), se degrada limpiamente a "sin medición".
+ *  - SIN Web Audio: el audio sale directo del <audio> a la salida del sistema.
+ *    Se eliminó el vúmetro porque createMediaElementSource() es irreversible
+ *    por elemento y provocaba silenciamientos/races al hacer Stop→Play.
  */
 
 import { $, log, toast, hms } from "./utils.js";
@@ -46,29 +47,20 @@ export class ReturnMonitor {
       stop:   $(ids.stop   || "#btnReturnStop"),
       state:  $(ids.state  || "#returnState"),
       time:   $(ids.time   || "#returnTime"),
-      vu:     $(ids.vu     || "#returnVu"),
-      db:     $(ids.db     || "#returnDb"),
       vol:    $(ids.vol    || "#returnVol"),
       volOut: $(ids.volOut || "#returnVolOut"),
       audio:  $(ids.audio  || "#returnAudio"),
     };
 
     this.hls = null;          // instancia hls.js activa
-    this.ctx = null;          // AudioContext del vúmetro
-    this.analyser = null;
-    this.gain = null;
-    this.srcNode = null;
-    this.rafId = 0;
     this.startedAt = 0;
     this.clockId = 0;
     this.watchdogId = 0;
     this.retries = 0;
     this.nativeMode = false;
     this.running = false;
-    this._playSeq = 0;          // secuencia Play/Stop: invalida plays en cola
-    this._meterFailed = false;  // vúmetro ya falló → no reintentar (evita spam)
-    this._meterWanted = false;  // usuario activó vúmetro manualmente?
-    this.video = null;          // elemento <audio> activo (nuevo en cada Play)
+    this._playSeq = 0;        // secuencia Play/Stop: invalida plays en cola
+    this.video = null;        // elemento <audio> activo (nuevo en cada Play)
 
     if (this.el.url && !this.el.url.value) this.el.url.value = DEFAULT_URL;
     this._bind();
@@ -85,28 +77,10 @@ export class ReturnMonitor {
   }
 
   _bind() {
-    // Stop se gestiona con captura + once: si un Play pendiente quedó en cola,
-    // se cancela antes de liberar recursos (evita "resucitar" tras Stop).
+    // Stop se gestiona con captura + secuencia: si un Play pendiente quedó en
+    // cola, se cancela antes de liberar recursos (evita "resucitar" tras Stop).
     this.el.play?.addEventListener("click", () => { this._playSeq++; this.start(); });
     this.el.stop?.addEventListener("click", () => { this._playSeq++; this.stop(); }, true);
-    // Botón VU: activa/desactiva el vúmetro manualmente (solo si CORS OK)
-    this.btnMeter = $("#btnReturnMeter");
-    this._meterWanted = false;
-    this.btnMeter?.addEventListener("click", () => {
-      if (!this.running) return toast("Conecta primero el retorno", "warn");
-      if (this._meterWanted) {           // OFF → apagar grafo y limpiar UI
-        this._meterWanted = false;
-        this._destroyGraphQuietly();
-        if (this.el.vu) this.el.vu.style.width = "0%";
-        if (this.el.db) this.el.db.textContent = "-∞ dB";
-        this.btnMeter.classList.remove("active");
-        log("Retorno: vúmetro desactivado", "info");
-      } else {                            // ON → intentar montar grafo nuevo elemento
-        this._meterWanted = true;
-        this._setupMeter().catch(() => {});
-        this.btnMeter.classList.add("active");
-      }
-    });
     this.el.vol?.addEventListener("input", () => this._setVolume(+this.el.vol.value));
     // Pausa inteligente: si el operador oculta la pestaña, corta el retorno.
     document.addEventListener("visibilitychange", () => {
@@ -114,18 +88,19 @@ export class ReturnMonitor {
     });
   }
 
+  /** Volumen aplicado siempre DIRECTO al elemento (sin grafo Web Audio). */
   _setVolume(pct) {
     const v = Math.min(1, Math.max(0, (pct || 0) / 100));
     if (this.el.volOut) this.el.volOut.textContent = `${Math.round(v * 100)} %`;
-    if (this.gain?.gain) this.gain.gain.value = v;         // vía Web Audio
-    else if (this.video) this.video.volume = v;            // vía elemento activo
+    if (this.video) this.video.volume = v;
   }
 
   /**
-   * Clona un <audio> nuevo sobre el estático del HTML (mismo id visual).
-   * Motivo: createMediaElementSource() es IRREVERSIBLE por elemento — reutilizar
-   * el mismo nodo tras Stop dejaba el vúmetro roto (InvalidStateError) y a veces
-   * silencioso el play. Con elemento NUEVO por sesión, todo grafo funciona.
+   * Crea un <audio> NUEVO en cada sesión de reproducción.
+   * Motivo histórico: con vúmetro, createMediaElementSource() ataba el elemento
+   * de forma irreversible y Stop→Play rompía la cadena. Sin Web Audio ya no es
+   * estrictamente necesario, pero mantenerlo garantiza sesiones aisladas
+   * (búfer, eventos y estado limpios) y anula cualquier vínculo residual.
    */
   _swapAudioElement() {
     const old = this.video || this.el.audio;
@@ -137,8 +112,6 @@ export class ReturnMonitor {
     fresh.volume = this.el.vol ? Math.min(1, (+this.el.vol.value || 100) / 100) : 1;
     old.replaceWith(fresh);
     this.video = fresh;
-    this._meterBound = false;       // vínculo con elemento viejo ya no aplica
-    this._meterFailed = false;      // permitir vúmetro en sesión nueva
   }
 
   /* -------------------------------- Start -------------------------------- */
@@ -158,12 +131,8 @@ export class ReturnMonitor {
     this._setState("CONECTANDO…", "warn");
     log(`Retorno: conectando ${url}`, "info");
 
-    // Estrategia anti-InvalidStateError: cada Play usa un <audio> NUEVO.
-    // createMediaElementSource es irreversible por elemento → reutilizar el
-    // mismo nodo tras Stop dejaba el vúmetro roto (y a veces el propio play).
     this._swapAudioElement();
     const video = this.video;
-    video.removeAttribute("crossorigin");     // sin CORS no hay vúmetro, pero suena
     this.nativeMode = !(window.Hls && window.Hls.isSupported());
 
     if (window.Hls && window.Hls.isSupported()) {
@@ -244,9 +213,6 @@ export class ReturnMonitor {
     if (!this.running || seq !== this._playSeq) return;   // play de una sesión ya cerrada
     this.retries = 0;
     this._setState(this.nativeMode ? "EN AIRE · NATIVO" : "EN AIRE · HLS.JS", "ok");
-    // Vúmetro SOLO si el operador lo activa manualmente (botón), para no
-    // tocar createMediaElementSource de forma automática y arriesgar silencio.
-    if (this._meterWanted) this._setupMeter().catch(() => {});
   }
 
   _retry(reason, recover) {
@@ -269,11 +235,9 @@ export class ReturnMonitor {
     const url = (this.el.url?.value || "").trim();
     if (!url || !this.running) return;
     if (this.hls) { this.hls.destroy(); this.hls = null; }
-    this._destroyGraphQuietly();          // grafo del elemento viejo, fuera
-    this._swapAudioElement();             // elemento NUEVO → sin vínculos previos
+    this._swapAudioElement();             // elemento NUEVO → estado limpio
     const v = this.video;
     const seq = this._playSeq;
-    v.removeAttribute("crossorigin");
     v.volume = this.el.vol ? Math.min(1, (+this.el.vol.value || 100) / 100) : 1;
     v.pause(); v.removeAttribute("src"); v.load();
     if (window.Hls && window.Hls.isSupported()) {
@@ -300,7 +264,6 @@ export class ReturnMonitor {
     this.running = false;
     clearInterval(this.clockId); this.clockId = 0;
     clearInterval(this.watchdogId); this.watchdogId = 0;
-    cancelAnimationFrame(this.rafId); this.rafId = 0;
 
     try { this.hls?.destroy(); } catch { /* noop */ }
     this.hls = null;
@@ -313,13 +276,6 @@ export class ReturnMonitor {
       try { v.load(); } catch { /* noop */ }   // aborta peticiones pendientes
     }
 
-    // Desmontaje del grafo Web Audio (el nodo del elemento impide GC si queda vivo)
-    this._meterWanted = false;
-    this.btnMeter?.classList.remove("active");
-    this._destroyGraphQuietly();
-
-    if (this.el.vu) this.el.vu.style.width = "0%";
-    if (this.el.db) this.el.db.textContent = "-∞ dB";
     if (this.el.time) this.el.time.textContent = "00:00:00";
     this.startedAt = 0;
     if (this.el.play) this.el.play.disabled = false;
@@ -356,81 +312,5 @@ export class ReturnMonitor {
                                   : "señal estancada (stalled)", () => this._softReload());
       }
     }, 5000);
-  }
-
-  /* ------------------------------ Vúmetro R ------------------------------- */
-
-  /**
-   * El <audio> es un elemento ESTÁTICO del HTML: si alguna vez se le creó un
-   * MediaElementSourceNode, ese vínculo es permanente e irreversible — un
-   * segundo createMediaElementSource lanza InvalidStateError. Además, los
-   * streams HLS sin cabeceras CORS "taintean" el elemento y Web Audio se
-   * niega a medirlos. Estrategia robusta:
-   *   1) Solo intentar una vez por sesión de vida del elemento.
-   *   2) Antes de crear el nodo, probar fetch(url): si no expone ACAO, no lo
-   *      intentamos siquiera (evita el mensaje de error en cada Play).
-   *   3) Si algo falla, degradar limpiamente a "sin medición" con volumen por
-   *      elemento; nunca se interrumpe el audio.
-   */
-  async _setupMeter() {
-    if (this.analyser || this._meterFailed) return;
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return;
-
-    try {
-      // createMediaElementSource SIEMPRE enruta el audio del elemento hacia el
-      // grafo: si el grafo no llega a destination, el elemento queda mudo.
-      // Por eso se construye TODO el grafo dentro del mismo try y, ante error,
-      // se destruye completo (el elemento recupera su salida directa).
-      this.ctx = new AC();
-      this.srcNode = this.ctx.createMediaElementSource(this.video);
-      this._meterBound = true;               // vínculo elemento↔nodo: permanente
-      this.analyser = this.ctx.createAnalyser();
-      this.analyser.fftSize = 1024;
-      this.gain = this.ctx.createGain();
-      this.srcNode.connect(this.analyser);
-      this.analyser.connect(this.gain);
-      this.gain.connect(this.ctx.destination);
-      this._buf = new Float32Array(this.analyser.fftSize);
-      this._setVolume(this.el.vol ? +this.el.vol.value : 100);
-      await this.ctx.resume().catch(() => {});
-      this._meterLoop();
-    } catch (err) {
-      this._meterFailed = true;              // no reintentar en esta sesión
-      this.btnMeter?.classList.remove("active");
-      this._meterWanted = false;
-      log(`Retorno: vúmetro no disponible (${err.name}); audio por salida directa del sistema`, "warn");
-      this._destroyGraphQuietly();
-      if (this.video) this.video.volume = this.el.vol ? Math.min(1, (+this.el.vol.value || 100) / 100) : 1;
-    }
-  }
-
-  _destroyGraphQuietly() {
-    cancelAnimationFrame(this.rafId); this.rafId = 0;
-    try { this.srcNode?.disconnect(); } catch { /* noop */ }
-    try { this.analyser?.disconnect(); } catch { /* noop */ }
-    try { this.gain?.disconnect(); } catch { /* noop */ }
-    this.srcNode = this.analyser = this.gain = null;
-    if (this.ctx && this.ctx.state !== "closed") this.ctx.close().catch(() => {});
-    this.ctx = null;
-    if (this.el.vu) this.el.vu.style.width = "0%";
-    if (this.el.db) this.el.db.textContent = "-∞ dB";
-  }
-
-  _meterLoop() {
-    const step = () => {
-      if (!this.running || !this.analyser) return;
-      this.analyser.getFloatTimeDomainData(this._buf);
-      let sum = 0;
-      for (let i = 0; i < this._buf.length; i++) sum += this._buf[i] * this._buf[i];
-      const rms = Math.sqrt(sum / this._buf.length);
-      const db = rms > 0 ? 20 * Math.log10(rms) : -Infinity;
-      const pct = Math.min(100, Math.max(0, ((db + 60) / 60) * 100));
-      if (this.el.vu) this.el.vu.style.width = `${pct}%`;
-      if (this.el.db) this.el.db.textContent =
-        Number.isFinite(db) ? `${db.toFixed(1)} dB` : "-∞ dB";
-      this.rafId = requestAnimationFrame(step);
-    };
-    this.rafId = requestAnimationFrame(step);
   }
 }

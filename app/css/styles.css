@@ -299,7 +299,6 @@ input[type="range"] { width: 100%; accent-color: var(--primary); padding: 0; }
 .pill-state.bad  { background: rgba(249,112,102,.16); color: #ffb4ad; border-color: rgba(249,112,102,.4); }
 .mono { font-family: var(--mono); }
 .return-time { font-size: 13px; color: var(--muted); }
-.return-vu { margin-top: 12px; }
 .return-vol { margin: 14px 0 0; }
 #returnAudio { display: none; }
 
