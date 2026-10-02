@@ -1,0 +1,26 @@
+{
+  "name": "WHIP Studio — Broadcast Live",
+  "short_name": "WHIP Studio",
+  "description": "Panel profesional de transmisión en directo WebRTC/WHIP compatible con MediaMTX para radio, TV, podcasting, iglesias y eventos.",
+  "id": "/app/",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b1020",
+  "theme_color": "#0b1020",
+  "categories": ["media", "video", "productivity"],
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Ir directo",
+      "short_name": "GO LIVE",
+      "url": "./index.html?golive=1",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

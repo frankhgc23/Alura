@@ -1,0 +1,519 @@
+/**
+ * main.js — Orquestador de WHIP Studio.
+ * Conecta UI ↔ CaptureManager ↔ AudioProcessor ↔ WhipPublisher ↔ Stats ↔ HUD.
+ * @module main
+ */
+
+import { $, log, toast, hms, bytes, loadConfig, saveConfig } from "./utils.js";
+import { CaptureManager, RESOLUTIONS } from "./devices.js";
+import { AudioProcessor } from "./audio.js";
+import { WhipPublisher } from "./whip.js";
+import { StatsCollector } from "./stats.js";
+import { BroadcastHud } from "./hud.js";
+import { ReturnMonitor } from "./return.js";
+import { detectCodecSupport } from "./sdp.js";
+
+/* ------------------------------- Estado ---------------------------------- */
+const capture = new CaptureManager();
+const audio = new AudioProcessor();
+const hud = new BroadcastHud();
+let pub = null;          // WhipPublisher activo
+let stats = null;        // StatsCollector activo
+let digitalZoom = 1;     // zoom aplicado en la vista (digital)
+
+const video = $("#previewVideo");
+const els = {
+  videoKind: $("#videoSourceKind"), videoSel: $("#videoSelect"), audioSel: $("#audioSelect"),
+  btnPreview: $("#btnPreview"), btnStopPreview: $("#btnStopPreview"),
+  whipMount: $("#whipMount"), whipPreview: $("#whipPreview"), whipToken: $("#whipToken"),
+  res: $("#resSelect"), mode: $("#modeSelect"),
+  vbit: $("#vbitrate"), abit: $("#abitrate"), vbitOut: $("#vbitOut"), abitOut: $("#abitOut"),
+  aCodec: $("#audioCodec"), vCodec: $("#videoCodec"), codecSupport: $("#codecSupport"),
+  goLive: $("#btnGoLive"), stop: $("#btnStop"), autoReconnect: $("#autoReconnect"),
+  audioOnly: $("#btnAudioOnly"),
+  hpf: $("#hpfSelect"), vuL: $("#vuL"), vuR: $("#vuR"), pkL: $("#pkL"), pkR: $("#pkR"),
+  dbL: $("#dbL"), dbR: $("#dbR"), clip: $("#clipBanner"),
+  noSignal: $("#noSignal"), frame: $("#monitorFrame"),
+  fs: $("#btnFullscreen"), thirds: $("#btnThirds"), mirror: $("#btnMirror"),
+  zoomLabel: $("#zoomLabel"), hudToggle: $("#btnHud"), install: $("#btnInstall"),
+  stBitrate: $("#stBitrate"), stFps: $("#stFps"), stRtt: $("#stRtt"), stLoss: $("#stLoss"),
+  stRes: $("#stRes"), stCodecs: $("#stCodecs"), stJitter: $("#stJitter"),
+  stUptime: $("#stUptime"), stBytes: $("#stBytes"), stRetries: $("#stRetries"),
+};
+
+/* --------------------- Opciones discretas de bitrate ---------------------- */
+/* El slider trabaja por ÍNDICE (0..n-1); el valor real en kb/s se resuelve
+   aquí, de modo que UI y publisher usan siempre la misma tabla. */
+const VBIT_OPTIONS = [1000, 2500, 4000, 6000];   // kb/s vídeo
+const ABIT_OPTIONS = [48, 64, 96];               // kb/s audio
+
+/** Devuelve el kbps efectivo para el índice actual del slider. */
+function kbpsFor(el, options) {
+  const i = Math.min(options.length - 1, Math.max(0, Math.round(+el.value || 0)));
+  return options[i];
+}
+const videoKbps = () => kbpsFor(els.vbit, VBIT_OPTIONS);
+const audioKbps = () => kbpsFor(els.abit, ABIT_OPTIONS);
+
+/* --------------------- Servidor WHIP fijo + punto de montaje --------------- */
+/* La emisora publica siempre en https://mtx.rcm1450.com/<canal>/whip.
+   El operador solo introduce el punto de montaje (p. ej. "live"). */
+const WHIP_BASE = "https://mtx.rcm1450.com";
+
+/** Normaliza el texto del campo a un canal válido ("live", "eventos/aula"…). */
+function normalizeMount(raw) {
+  let m = String(raw || "").trim();
+  // Tolerancia: si alguien pega la URL completa, se extrae el punto de montaje.
+  if (/^https?:\/\//i.test(m)) {
+    try { m = new URL(m).pathname; } catch { /* se usa tal cual */ }
+  }
+  m = m.replace(/^\/+/, "")            // sin slashes iniciales
+       .replace(/\/?whip\/?$/i, "")     // sin sufijo "/whip" duplicado
+       .replace(/[^A-Za-z0-9_~.%/-]/g, "") // caracteres válidos de ruta
+       .replace(/\/{2,}/g, "/")
+       .replace(/\/+$/, "");
+  return m;
+}
+
+/** Endpoint WHIP completo derivado del campo editable. */
+function whipEndpoint() {
+  const mount = normalizeMount(els.whipMount.value);
+  return mount ? `${WHIP_BASE}/${mount}/whip` : "";
+}
+
+function refreshWhipPreview() {
+  els.whipPreview.textContent = whipEndpoint() || `${WHIP_BASE}/…/whip`;
+}
+
+/* ------------------------- Persistencia de configuración -------------------- */
+const cfg = loadConfig();
+if (cfg.whipMount != null) els.whipMount.value = cfg.whipMount;
+else if (cfg.whipUrl) els.whipMount.value = normalizeMount(cfg.whipUrl); // migración
+else els.whipMount.value = "live";                                        // valor por defecto
+if (cfg.whipToken) els.whipToken.value = cfg.whipToken;
+refreshWhipPreview();
+if (cfg.res) els.res.value = cfg.res;
+if (cfg.mode) els.mode.value = cfg.mode;
+// Compatibilidad: versiones antiguas guardaban kb/s puros (300–12000 / 32–320);
+// las nuevas guardan el índice del slider. Se normaliza al cargar.
+if (cfg.vbit != null) {
+  const v = +cfg.vbit;
+  els.vbit.value = String(VBIT_OPTIONS.includes(v) ? VBIT_OPTIONS.indexOf(v) : (v < VBIT_OPTIONS.length ? v : 1));
+}
+if (cfg.abit != null) {
+  const v = +cfg.abit;
+  els.abit.value = String(ABIT_OPTIONS.includes(v) ? ABIT_OPTIONS.indexOf(v) : (v < ABIT_OPTIONS.length ? v : 1));
+}
+if (cfg.aCodec) els.aCodec.value = cfg.aCodec;
+if (cfg.vCodec) els.vCodec.value = cfg.vCodec;
+if (cfg.hpf) els.hpf.value = cfg.hpf;
+els.audioOnly.checked = !!cfg.audioOnly;
+
+function persist() {
+  saveConfig({
+    whipMount: normalizeMount(els.whipMount.value), whipToken: els.whipToken.value.trim(),
+    res: els.res.value, mode: els.mode.value,
+    vbit: +els.vbit.value, abit: +els.abit.value,   // se guarda el índice
+    aCodec: els.aCodec.value, vCodec: els.vCodec.value, hpf: els.hpf.value,
+    audioOnly: els.audioOnly.checked,
+    returnUrl: $("#returnUrl")?.value || "", returnVol: $("#returnVol")?.value || "100",
+  });
+}
+
+/* --------------------- Retorno de audio (N-1) vía HLS.js ------------------ */
+/* Fuente bajo demanda: sin conexión hasta Play; Stop libera todos los recursos. */
+new ReturnMonitor();
+{
+  const savedUrl = cfg.returnUrl || "";
+  if (savedUrl && $("#returnUrl")) $("#returnUrl").value = savedUrl;
+  if (cfg.returnVol && $("#returnVol")) {
+    $("#returnVol").value = cfg.returnVol;
+    $("#returnVol").dispatchEvent(new Event("input"));
+  }
+  $("#returnUrl")?.addEventListener("change", () => persist());
+  $("#returnVol")?.addEventListener("change", () => persist());
+}
+
+/* ------------------------- Dispositivos / captura ------------------------- */
+async function refreshDeviceList() {
+  const { video: cams, audio: mics } = await CaptureManager.listDevices();
+  const fill = (sel, list, kind) => {
+    const prev = sel.value || (kind === "audio" ? "" : "");
+    sel.innerHTML = "";
+    list.forEach((d, i) => {
+      const o = document.createElement("option");
+      o.value = d.deviceId;
+      o.textContent = d.label || `${kind === "video" ? "Cámara" : "Micrófono"} ${i + 1}`;
+      sel.appendChild(o);
+    });
+    if (kind === "audio") {
+      const none = document.createElement("option");
+      none.value = "none"; none.textContent = "Sin audio";
+      sel.appendChild(none);
+    }
+    if (prev && list.some((d) => d.deviceId === prev)) sel.value = prev;
+  };
+  fill(els.videoSel, cams, "video");
+  fill(els.audioSel, mics, "audio");
+}
+
+async function startPreview() {
+  try {
+    await capture.start({
+      videoKind: els.audioOnly.checked ? "camera" : els.videoKind.value,
+      audioOnly: els.audioOnly.checked,
+      videoDeviceId: els.videoSel.value || undefined,
+      audioDeviceId: els.audioSel.value || undefined,
+    });
+    video.srcObject = capture.stream;
+    els.noSignal.hidden = !!capture.stream;
+    els.btnPreview.disabled = true;
+    els.btnStopPreview.disabled = false;
+    els.goLive.disabled = !isWhipEndpointValid();
+    audio.attach(capture.stream);
+    audio.setHighPass(+els.hpf.value);
+    await refreshDeviceList();      // ahora los labels incluyen nombre real
+    log(els.audioOnly.checked ? "Previsualización iniciada (SOLO AUDIO — cámara apagada)" : "Previsualización iniciada", "ok");
+  } catch (err) {
+    els.noSignal.hidden = false;
+    log(`Error de captura: ${err.name} — ${err.message}`, "err");
+    toast(`No se pudo acceder al dispositivo (${err.name})`, "err");
+  }
+}
+
+function stopPreview() {
+  if (pub) return toast("Detenga primero la transmisión en directo", "warn");
+  audio.detach();
+  capture.stopAll();
+  video.srcObject = null;
+  els.noSignal.hidden = false;
+  els.btnPreview.disabled = false;
+  els.btnStopPreview.disabled = true;
+  els.goLive.disabled = true;
+}
+
+/** Cambio de dispositivo sin cortar: reabre captura y replaceTrack si hay directo. */
+async function swapTrack(kind) {
+  if (!capture.stream) return;             // aún no hay previsualización
+  if (kind === "video" && els.audioOnly.checked) return;  // sin vídeo en modo solo audio
+  const wasLive = pub?.state === "connected" || pub?.state === "reconnecting";
+  try {
+    await capture.start({
+      videoKind: els.videoKind.value,
+      audioOnly: els.audioOnly.checked,
+      videoDeviceId: kind === "video" ? els.videoSel.value : els.videoSel.value || undefined,
+      audioDeviceId: kind === "audio" ? els.audioSel.value : els.audioSel.value || undefined,
+    });
+    video.srcObject = capture.stream;
+    if (kind === "audio") { audio.detach(); audio.attach(capture.stream); audio.setHighPass(+els.hpf.value); }
+    if (wasLive) {
+      const t = kind === "video" ? capture.videoTrack : capture.audioTrack;
+      if (t) await pub.replaceTrack(kind, t);
+    }
+    log(`${kind === "video" ? "Vídeo" : "Audio"} cambiado sin interrumpir`, "ok");
+  } catch (err) {
+    log(`Cambio de dispositivo fallido: ${err.message}`, "err");
+  }
+}
+
+/* ------------------------------ Transmisión ------------------------------- */
+function isWhipEndpointValid() {
+  return whipEndpoint() !== "";
+}
+
+async function goLive() {
+  if (!capture.stream) return toast("Inicie la previsualización primero", "warn");
+  if (!isWhipEndpointValid()) return toast("Indique un punto de montaje (p. ej. «live»)", "err");
+  persist();
+
+  pub = new WhipPublisher({
+    endpoint: whipEndpoint(),   // https://mtx.rcm1450.com/<canal>/whip
+    token: els.whipToken.value.trim() || undefined,
+    videoKbps: videoKbps(),   // valor REAL según tabla (1000/2500/4000/6000)
+    audioKbps: audioKbps(),   // valor REAL según tabla (48/64/96)
+    videoCodec: els.vCodec.value || undefined,
+    audioCodec: els.aCodec.value || undefined,
+    audioOnly: els.audioOnly.checked,   // oferta SDP sin m=video si está activo
+    tracks: { video: capture.videoTrack, audio: capture.audioTrack },
+  });
+  pub.autoReconnect = els.autoReconnect.checked;
+
+  pub.addEventListener("state", (e) => {
+    hud.setState(e.detail.state);
+    const live = e.detail.state === "connected";
+    els.stop.disabled = !(live || e.detail.state === "reconnecting" || e.detail.state === "connecting");
+    els.goLive.disabled = live || e.detail.state === "connecting" || e.detail.state === "reconnecting";
+    // Pantalla siempre despierta durante el directo (refuerzo en móvil).
+    if (live) hud.requestWakeLock();
+  });
+  hud.setAudioOnly(els.audioOnly.checked);
+  pub.addEventListener("ice", (e) => hud.setIce(e.detail.state));
+  pub.addEventListener("codecs", (e) => { if (stats) stats.codecs = { video: e.detail.video, audio: e.detail.audio }; });
+
+  stats = new StatsCollector(pub);
+  stats.addEventListener("stats", (e) => paintStats(e.detail));
+  stats.start();
+
+  try {
+    await pub.connect();
+    els.goLive.disabled = true;
+    els.stop.disabled = false;
+  } catch (err) {
+    log(`Publicación rechazada: ${err.message}`, "err");
+    toast(`WHIP error: ${err.message.slice(0, 120)}`, "err", 6000);
+    hud.setState("failed");
+    // con reconexión activa sigue intentándolo cada 4 s
+    if (pub.autoReconnect) pub._handleDrop?.("primer fallo");
+    else { pub.stop().catch(() => {}); pub = null; }
+  }
+}
+
+async function stopLive() {
+  if (!pub) return;
+  stats?.stop();
+  await pub.stop();
+  pub = null;
+  hud.setState("closed");
+  els.goLive.disabled = !capture.stream;
+  els.stop.disabled = true;
+}
+
+/* --------------------------- Pintado de UI -------------------------------- */
+let lastAudioDb = -Infinity;
+audio.addEventListener("levels", (e) => {
+  const L = e.detail;
+  els.vuL.style.width = `${L.l}%`;
+  els.vuR.style.width = `${L.r}%`;
+  els.pkL.style.left = `${AudioProcessor.dbToPct(L.peakL)}%`;
+  els.pkR.style.left = `${AudioProcessor.dbToPct(L.peakR)}%`;
+  els.dbL.textContent = fmtDb(L.dbL);
+  els.dbR.textContent = fmtDb(L.dbR);
+  els.clip.hidden = !L.clip;
+  lastAudioDb = Math.max(L.dbL, L.dbR);
+});
+
+const fmtDb = (db) => (Number.isFinite(db) ? `${db.toFixed(1)} dB` : "-∞ dB");
+
+function paintStats(s) {
+  els.stBitrate.textContent = s.kbps != null ? `${Math.round(s.kbps)} kb/s` : "—";
+  els.stFps.textContent = s.fps != null ? Math.round(s.fps) : "—";
+  els.stRtt.textContent = s.rttMs != null ? `${s.rttMs.toFixed(0)} ms` : "—";
+  els.stLoss.textContent = `${(s.lossPct ?? 0).toFixed(2)} %`;
+  els.stRes.textContent = s.resolution;
+  els.stCodecs.textContent = s.codecs;
+  els.stJitter.textContent = s.jitterMs != null ? `${s.jitterMs.toFixed(1)} ms` : "—";
+  els.stUptime.textContent = s.uptimeStr;
+  els.stBytes.textContent = bytes(s.bytesTotal);
+  els.stRetries.textContent = s.retries;
+  hud.update(s, lastAudioDb);
+}
+
+/* --------------------------------- Zoom ---------------------------------- */
+async function applyZoom(factor) {
+  factor = Math.min(5, Math.max(1, factor));
+  const r = await capture.setZoom(factor);
+  if (r.applied === "hardware") {
+    digitalZoom = 1;
+    els.frame.classList.remove("zoom-video");
+    hud.setZoom(r.value);
+    els.zoomLabel.textContent = `Zoom HW ${r.value.toFixed(1)}×`;
+  } else {
+    digitalZoom = factor;
+    els.frame.classList.add("zoom-video");
+    els.frame.style.setProperty("--zoom", factor);
+    hud.setZoom(factor);
+    els.zoomLabel.textContent = `Zoom ${factor.toFixed(1)}×${capture.hwZoom ? "" : " (digital)"}`;
+  }
+}
+
+/* Pinch-to-zoom en móvil + rueda en escritorio sobre el monitor */
+let pinchStart = 0, pinchZoom0 = 1;
+els.frame.addEventListener("pointerdown", (e) => {
+  if (e.pointerType !== "touch" || e.isPrimary) return;
+});
+els.frame.addEventListener("touchstart", (e) => {
+  if (e.touches.length === 2) {
+    pinchStart = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+    pinchZoom0 = digitalZoom;
+  }
+}, { passive: true });
+els.frame.addEventListener("touchmove", (e) => {
+  if (e.touches.length === 2 && pinchStart) {
+    e.preventDefault();
+    const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+    applyZoom(pinchZoom0 * (d / pinchStart));
+  }
+}, { passive: false });
+els.frame.addEventListener("wheel", (e) => {
+  if (!capture.videoTrack) return;
+  e.preventDefault();
+  applyZoom(digitalZoom * (e.deltaY < 0 ? 1.1 : 0.9));
+}, { passive: false });
+
+/* ------------------------------ Eventos UI -------------------------------- */
+els.btnPreview.onclick = startPreview;
+els.btnStopPreview.onclick = stopPreview;
+els.videoSel.onchange = () => swapTrack("video");
+els.audioSel.onchange = () => swapTrack("audio");
+els.videoKind.onchange = async () => {
+  if (!capture.stream) return;
+  if (els.videoKind.value === "screen") await capture.start({ videoKind: "screen" }).then(() => { video.srcObject = capture.stream; });
+  else await capture.switchToCamera().then(() => { video.srcObject = capture.stream; });
+};
+
+els.res.onchange = async () => {
+  capture.resolutionKey = els.res.value;
+  persist();
+  if (capture.videoTrack && capture.kind === "camera") await capture.reapplyConstraints();
+};
+els.mode.onchange = async () => {
+  capture.mode = els.mode.value;
+  persist();
+  if (capture.videoTrack && capture.kind === "camera") await capture.reapplyConstraints();
+};
+
+/* Sliders discretos: el valor del input es el ÍNDICE de la tabla. Al moverlos
+   se pinta el kb/s real, se persiste y —si hay directo— se aplica EN CALIENTE
+   vía RTCRtpSender.setParameters (sin renegociar ni cortar la emisión). */
+els.vbit.oninput = () => {
+  els.vbitOut.textContent = `${videoKbps()} kb/s`;
+  persist();
+  if (pub) pub.applyBitrates({ videoKbps: videoKbps() });
+};
+els.abit.oninput = () => {
+  els.abitOut.textContent = `${audioKbps()} kb/s`;
+  persist();
+  if (pub) pub.applyBitrates({ audioKbps: audioKbps() });
+};
+// Sincronizar <output> inicial con la tabla tras restaurar la config
+els.vbitOut.textContent = `${videoKbps()} kb/s`;
+els.abitOut.textContent = `${audioKbps()} kb/s`;
+els.aCodec.onchange = persist;
+els.vCodec.onchange = persist;
+
+/* Modo SOLO AUDIO: renegocia la publicación WHIP sin línea de vídeo (POST nuevo)
+   y apaga la cámara para ahorrar batería/CPU en móvil. Al desactivarlo reabre
+   la cámara y vuelve a negociar audio+vídeo. */
+let swappingAudioOnly = false;
+els.audioOnly.onchange = async () => {
+  if (swappingAudioOnly) return;                 // reentrancia desde setLiveMode
+  persist();
+  const on = els.audioOnly.checked;
+  if (!capture.stream && !pub) {
+    log(on ? "Modo SOLO AUDIO seleccionado" : "Modo AUDIO+VÍDEO seleccionado", "info");
+    return;                                      // aún no emite: se aplicará al iniciar
+  }
+  swappingAudioOnly = true;
+  try {
+    await capture.setAudioOnly(on);              // apaga/reabre la pista de vídeo
+    video.srcObject = capture.stream;            // monitor refleja el cambio
+    if (!on && capture.audioTrack) {             // al reabrir cámara, reenganchar el VU
+      audio.detach(); audio.attach(capture.stream); audio.setHighPass(+els.hpf.value);
+    }
+    hud.setAudioOnly(on);                        // badge SOLO AUDIO en el HUD
+    if (pub) {
+      const ok = await pub.setAudioOnly(on);     // renegociación WHIP en caliente
+      if (!ok) toast("No se pudo renegociar el modo; intente DETENER y GO LIVE", "warn", 5000);
+    }
+    log(on ? "🎙 Transmisión SOLO AUDIO activa" : "📹 Transmisión AUDIO+VÍDEO activa", "ok");
+  } finally {
+    swappingAudioOnly = false;
+  }
+};
+
+/**
+ * API pública del modo de emisión:
+ *   setLiveMode("audio") → solo micro (radio/podcast; SDP sin m=video)
+ *   setLiveMode("av")    → audio + vídeo
+ * Acepta también booleanos. Actualiza checkbox, captura y publicación.
+ */
+async function setLiveMode(mode) {
+  const on = mode === true || mode === "audio" || mode === "audio-only";
+  if (els.audioOnly.checked !== on) {
+    els.audioOnly.checked = on;
+    await els.audioOnly.onchange();   // dispara toda la cadena de cambio
+  }
+  return on;
+}
+window.WHIP = { setLiveMode, get state() { return pub?.state ?? "idle"; }, get audioOnly() { return els.audioOnly.checked; } };
+
+els.whipMount.oninput = () => { refreshWhipPreview(); persist(); els.goLive.disabled = !capture.stream || !isWhipEndpointValid(); };
+els.whipToken.oninput = persist;
+els.autoReconnect.onchange = () => { if (pub) pub.autoReconnect = els.autoReconnect.checked; };
+
+els.hpf.onchange = () => { audio.setHighPass(+els.hpf.value); persist(); };
+
+els.goLive.onclick = goLive;
+els.stop.onclick = stopLive;
+
+els.fs.onclick = () => {
+  const f = els.frame;
+  if (document.fullscreenElement) document.exitFullscreen();
+  else (f.requestFullscreen ?? f.webkitRequestFullscreen)?.call(f);
+};
+els.thirds.onclick = () => {
+  const on = $("#thirdsOverlay").hidden;
+  $("#thirdsOverlay").hidden = !on;
+  els.thirds.setAttribute("aria-pressed", String(on));
+};
+els.mirror.onclick = () => {
+  const on = !els.frame.classList.contains("mirror");
+  els.frame.classList.toggle("mirror", on);
+  els.mirror.setAttribute("aria-pressed", String(on));
+};
+els.hudToggle.onclick = () => {
+  const show = els.hudToggle.getAttribute("aria-pressed") !== "true";
+  els.hudToggle.setAttribute("aria-pressed", String(show));
+  hud.setVisible(show);
+};
+
+/* Doble toque en móvil = reset de zoom */
+let lastTap = 0;
+els.frame.addEventListener("touchend", () => {
+  const now = Date.now();
+  if (now - lastTap < 300) applyZoom(1);
+  lastTap = now;
+});
+
+/* ------------------------ Soporte de códecs (UI) -------------------------- */
+async function paintCodecSupport() {
+  const vids = ["H264", "H265", "VP8", "VP9", "AV1"];
+  const auds = ["opus", "aac", "PCMU", "PCMA"];
+  const parts = [];
+  for (const c of vids) parts.push(`<b class="${await detectCodecSupport("video", c) ? "ok" : "no"}">${c}</b>`);
+  parts.push("·");
+  for (const c of auds) parts.push(`<b class="${await detectCodecSupport("audio", c) ? "ok" : "no"}">${c.toUpperCase()}</b>`);
+  els.codecSupport.innerHTML = `Soporte del navegador: ${parts.join(" ")}`;
+}
+
+/* --------------------------------- PWA ------------------------------------ */
+let deferredPrompt = null;
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  deferredPrompt = e;
+  els.install.hidden = false;
+});
+els.install.onclick = async () => {
+  if (!deferredPrompt) return;
+  deferredPrompt.prompt();
+  await deferredPrompt.userChoice;
+  deferredPrompt = null;
+  els.install.hidden = true;
+};
+
+/* ------------------------------ Arranque ---------------------------------- */
+(async function init() {
+  log("WHIP Studio listo. Inicie la previsualización y pulse GO LIVE.", "ok");
+  hud.setVisible(true);
+  if (!window.isSecureContext) {
+    toast("⚠ Se requiere HTTPS (o localhost) para cámara/micrófono", "warn", 6000);
+    log("Contexto no seguro: getUserMedia puede estar bloqueado", "warn");
+  }
+  await refreshDeviceList();
+  paintCodecSupport().catch(() => {});
+  navigator.mediaDevices?.addEventListener?.("devicechange", refreshDeviceList);
+  if ("serviceWorker" in navigator) {
+    try { await navigator.serviceWorker.register("sw.js"); log("Service Worker activo (PWA)", "info"); }
+    catch (err) { log(`SW no registrado: ${err.message}`, "warn"); }
+  }
+})();
