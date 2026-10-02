@@ -1,0 +1,3 @@
+# Ignorados: artefactos de empaquetado local (no subir a GitHub)
+*.zip
+*.tar.gz
