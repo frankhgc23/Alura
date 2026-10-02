@@ -321,24 +321,107 @@ input[type="range"] { width: 100%; accent-color: var(--primary); padding: 0; }
 .toast.err { border-left-color: var(--bad); }
 @keyframes slide-in { from { transform: translateX(30px); opacity: 0; } }
 
-/* ------------------------------- Responsive ------------------------------ */
+/* ------------------------------- Responsive ------------------------------
+   Estrategia mobile-first: las reglas de <=720px adaptan el panel a una sola
+   columna con monitor prioritario, dock de acciones fijo y objetivos tactiles
+   de >=44px. Los margenes seguros (notch/home) se resuelven con env().        */
+
+/* Dock de acciones (GO LIVE / DETENER). En movil/tablet es barra inferior
+   fija; en escritorio (>720px) se integra al final de la columna izquierda. */
+.action-dock {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 40;
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  background: rgba(11, 16, 32, .92);
+  backdrop-filter: blur(10px);
+  border-top: 1px solid var(--line);
+}
+.action-dock button { flex: 1; min-height: 48px; font-size: 15px; touch-action: manipulation; }
+.action-dock .go-live { flex: 1.6; }
+
+@media (min-width: 721px) {
+  .action-dock {
+    position: static;
+    background: transparent;
+    backdrop-filter: none;
+    border-top: 0;
+    padding: 0;
+    margin: 0;
+  }
+}
+
 @media (max-width: 1024px) {
   .layout { grid-template-columns: 1fr; }
-  .monitor-col { order: -1; }             /* el monitor manda en móvil */
+  .monitor-col { order: -1; }             /* el monitor manda en movil */
   .brand-text p { display: none; }
 }
 
-@media (max-width: 600px) {
-  .topbar { padding: 10px 12px; gap: 10px; }
-  .layout { padding: 12px 12px 60px; }
-  .live-indicator { font-size: 11px; padding: 6px 10px; }
-  .live-timer { display: none; }
-  .field-grid { grid-template-columns: 1fr; }
-  .stats-grid { grid-template-columns: 1fr 1fr; }
-  .hud { font-size: 10.5px; }
+@media (max-width: 720px) {
+  html, body { overflow-x: hidden; }       /* nada de scroll horizontal */
+  body { font-size: 15px; }                /* legibilidad sin zoom manual */
+
+  .topbar {
+    padding: calc(8px + env(safe-area-inset-top)) 12px 8px;
+    gap: 8px; flex-wrap: wrap;
+  }
+  .logo { width: 34px; height: 34px; font-size: 16px; border-radius: 10px; }
+  .brand-text h1 { font-size: 16px; }
+  .live-indicator { font-size: 11px; padding: 6px 10px; order: 3; width: 100%; justify-content: center; }
+  .conn-pill { display: none; }
+
+  .layout {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding: 12px 12px calc(84px + env(safe-area-inset-bottom)); /* espacio para el dock */
+  }
+  .card { padding: 14px; border-radius: 14px; }
+
+  /* Objetivos tactiles minimos (44x44 px recomendados por WCAG/HIG) */
+  button { min-height: 44px; padding: 10px 14px; touch-action: manipulation; }
+  select, input[type="url"], input[type="text"] { min-height: 44px; font-size: 16px; } /* 16px evita auto-zoom de iOS al enfocar */
+  .icon-btn { min-height: 38px; padding: 8px 12px; }
+  .mt-btn { width: 44px; height: 40px; font-size: 17px; }
+
+  .field-grid { grid-template-columns: 1fr; gap: 0; }
+  .row-buttons { flex-wrap: wrap; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+
+  /* Sliders mas faciles de arrastrar con el dedo */
+  input[type="range"] { height: 34px; }
+
+  .hud { font-size: 10.5px; padding: 8px 10px calc(44px + 6px); }
+  .hud-item { padding: 2px 7px; }
+
+  .log { max-height: 140px; -webkit-overflow-scrolling: touch; }
+
+  .toast-stack { left: 12px; right: 12px; bottom: calc(84px + env(safe-area-inset-bottom)); }
+  .toast { max-width: none; }
 }
 
-/* PWA standalone */
+@media (max-width: 380px) {              /* moviles muy estrechos (p. ej. Galaxy Fold) */
+  .layout { padding-left: 8px; padding-right: 8px; }
+  .stats-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .action-dock button { font-size: 14px; }
+}
+
+/* Paisaje en movil: monitor grande arriba, controles compactos debajo */
+@media (max-height: 500px) and (orientation: landscape) {
+  .monitor-frame { max-height: 56vh; margin-inline: auto; }
+  .layout { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+  .topbar { padding-block: 6px; }
+  .brand-text { display: none; }
+}
+
+/* Tablets verticales (721-1024px): dos columnas compactas */
+@media (min-width: 721px) and (max-width: 1024px) {
+  .layout { grid-template-columns: minmax(300px, 360px) 1fr; }
+}
+
+/* PWA standalone: respeta notch/estado en todas las plataformas */
 @media (display-mode: standalone) {
   .topbar { padding-top: max(12px, env(safe-area-inset-top)); }
+  .action-dock { padding-bottom: calc(10px + max(env(safe-area-inset-bottom), 6px)); }
 }

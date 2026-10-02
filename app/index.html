@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, viewport-fit=cover">
   <meta name="description" content="WHIP Studio — Panel profesional de transmisión en directo WebRTC/WHIP compatible con MediaMTX. Radio, TV, podcasting, iglesias y eventos.">
   <meta name="theme-color" content="#0b1020">
   <meta name="mobile-web-app-capable" content="yes">
@@ -165,10 +165,6 @@
           <span>Solo audio (radio / podcast — sin vídeo)</span>
         </label>
 
-        <div class="row-buttons big">
-          <button id="btnGoLive" class="go-live" disabled>🔴 GO LIVE</button>
-          <button id="btnStop" class="danger" disabled>DETENER</button>
-        </div>
         <label class="switch-row">
           <input type="checkbox" id="autoReconnect" checked>
           <span>Reconexión automática (cada 4 s)</span>
@@ -271,6 +267,13 @@
       </div>
     </section>
   </main>
+
+  <!-- Barra de acciones: dock inferior fijo en móvil/tablet; integrada en la
+       columna de controles a partir de 721px (ver styles.css @media). -->
+  <div class="action-dock" id="actionDock">
+    <button id="btnGoLive" class="go-live" disabled>🔴 GO LIVE</button>
+    <button id="btnStop" class="danger" disabled>DETENER</button>
+  </div>
 
   <div class="toast-stack" id="toasts"></div>
 
