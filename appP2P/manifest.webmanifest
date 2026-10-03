@@ -1,0 +1,20 @@
+{
+  "name": "RCM P2P Camera LAN",
+  "short_name": "RCM P2P Cam",
+  "description": "Cámara P2P en LAN basada en WebRTC/PeerJS con preferencia H.264/H.265, diagnóstico en vivo y grillas de encuadre.",
+  "id": "/appP2P/",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b0f14",
+  "theme_color": "#0b0f14",
+  "lang": "es",
+  "categories": ["photography", "utilities", "productivity"],
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
